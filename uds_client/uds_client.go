@@ -8,8 +8,8 @@ import (
 	"sync"
 	"time"
 
-    "github.com/LoveWonYoung/canbuskit/driver"
-    isotp "github.com/LoveWonYoung/canbuskit/tp_layer"
+	"github.com/LoveWonYoung/canbuskit/driver"
+	isotp "github.com/LoveWonYoung/canbuskit/tp_layer"
 )
 
 // Transport 定义了 UDS 客户端所需的 ISO-TP 传输层接口
@@ -318,6 +318,7 @@ func (c *UDSClient) RequestWithContext(ctx context.Context, payload []byte, opts
 	expectedResponseSID := requestSID + 0x40 // 正响应 SID = 请求 SID + 0x40
 
 	var lastErr error
+	var lastResp []byte
 	for attempt := 0; attempt <= opts.MaxRetries; attempt++ {
 		if attempt > 0 {
 			log.Printf("UDS 请求重试 (%d/%d), SID=0x%02X", attempt, opts.MaxRetries, requestSID)
@@ -331,12 +332,20 @@ func (c *UDSClient) RequestWithContext(ctx context.Context, payload []byte, opts
 				return nil, err
 			}
 
-			// 检查是否是可重试的 UDS 错误
+			// 检查是否是 UDS 错误
 			var udsErr *UDSError
-			if errors.As(err, &udsErr) && udsErr.IsRetryable() && attempt < opts.MaxRetries {
-				lastErr = err
-				continue
+			if errors.As(err, &udsErr) {
+				// 可重试的 UDS 错误 -> 记录最后一次错误和响应，然后重试
+				if udsErr.IsRetryable() && attempt < opts.MaxRetries {
+					lastErr = err
+					lastResp = response
+					continue
+				}
+				// 不可重试的 UDS 错误 -> 返回原始响应和错误
+				return response, err
 			}
+
+			// 其他错误
 			return nil, err
 		}
 
@@ -344,20 +353,21 @@ func (c *UDSClient) RequestWithContext(ctx context.Context, payload []byte, opts
 		if len(response) > 0 && response[0] != expectedResponseSID {
 			// 检查是否是负响应
 			if response[0] == 0x7F && len(response) >= 3 {
-				return nil, &UDSError{
+				return response, &UDSError{
 					ServiceID: response[1],
 					NRC:       response[2],
 					Message:   getNRCDescription(response[2]),
 				}
 			}
-			return nil, fmt.Errorf("响应 SID 不匹配: 期望 0x%02X, 收到 0x%02X", expectedResponseSID, response[0])
+			return response, fmt.Errorf("响应 SID 不匹配: 期望 0x%02X, 收到 0x%02X", expectedResponseSID, response[0])
 		}
 
 		return response, nil
 	}
 
 	if lastErr != nil {
-		return nil, fmt.Errorf("达到最大重试次数 (%d): %w", opts.MaxRetries, lastErr)
+		// 如果有最后一次响应，返回它以便调用方能查看原始帧
+		return lastResp, fmt.Errorf("达到最大重试次数 (%d): %w", opts.MaxRetries, lastErr)
 	}
 	return nil, errors.New("未知错误")
 }
@@ -376,11 +386,17 @@ func (c *UDSClient) singleRequest(ctx context.Context, payload []byte, timeout t
 	deadline := time.NewTimer(timeout)
 	defer deadline.Stop()
 
+	// 为防止测试时未初始化 c.ctx 导致空指针，使用本地 done channel
+	clientDone := (<-chan struct{})(nil)
+	if c.ctx != nil {
+		clientDone = c.ctx.Done()
+	}
+
 	for {
 		select {
 		case <-ctx.Done():
 			return nil, ctx.Err()
-		case <-c.ctx.Done():
+		case <-clientDone:
 			return nil, errors.New("UDS 客户端已关闭")
 		case <-deadline.C:
 			return nil, fmt.Errorf("等待响应超时 (%v)", timeout)
@@ -406,7 +422,7 @@ func (c *UDSClient) singleRequest(ctx context.Context, payload []byte, timeout t
 					}
 
 					// 其他负响应
-					return nil, &UDSError{
+					return data, &UDSError{
 						ServiceID: serviceSID,
 						NRC:       nrc,
 						Message:   getNRCDescription(nrc),

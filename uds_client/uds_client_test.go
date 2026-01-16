@@ -7,8 +7,8 @@ import (
 	"testing"
 	"time"
 
-    "github.com/LoveWonYoung/canbuskit/driver"
-    isotp "github.com/LoveWonYoung/canbuskit/tp_layer"
+	"github.com/LoveWonYoung/canbuskit/driver"
+	isotp "github.com/LoveWonYoung/canbuskit/tp_layer"
 )
 
 // ============================================================================
@@ -386,6 +386,39 @@ func TestMockCANDriver(t *testing.T) {
 		}
 	case <-time.After(100 * time.Millisecond):
 		t.Error("等待响应超时")
+	}
+}
+
+// 新增测试：RequestWithContext 在收到负响应时，返回原始响应帧与错误
+func TestRequestWithContext_ReturnsResponseOnNRC(t *testing.T) {
+	mockTransport := NewMockTransport()
+	client := &UDSClient{
+		stack: mockTransport,
+		mode:  AddressPhysical,
+	}
+
+	// 模拟异步到达：推入负响应（小延时，避免被 pre-clear 清掉）
+	go func() {
+		time.Sleep(1 * time.Millisecond)
+		mockTransport.PushResponse([]byte{0x7F, 0x22, NRCServiceNotSupported})
+	}()
+
+	resp, err := client.RequestWithContext(context.Background(), []byte{0x22, 0xF1, 0x90}, DefaultRequestOptions())
+	if err == nil {
+		t.Fatalf("期望返回错误，但 nil")
+	}
+	if resp == nil {
+		t.Fatalf("期望返回原始响应帧，但为 nil")
+	}
+	if !(len(resp) >= 3 && resp[0] == 0x7F && resp[2] == NRCServiceNotSupported) {
+		t.Fatalf("原始响应帧不匹配: %v", resp)
+	}
+	var udsErr *UDSError
+	if !errors.As(err, &udsErr) {
+		t.Fatalf("期望 err 为 *UDSError, 实际: %T", err)
+	}
+	if udsErr.NRC != NRCServiceNotSupported {
+		t.Fatalf("UDSError 的 NRC 不匹配")
 	}
 }
 
