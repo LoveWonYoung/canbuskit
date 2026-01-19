@@ -14,4 +14,5 @@ var (
 
 func init() {
 	fmt.Println("Loaded x64	 DLLs")
+	loadProcAddresses()
 }

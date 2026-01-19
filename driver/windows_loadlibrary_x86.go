@@ -26,6 +26,7 @@ func loadDLLs() {
 		fmt.Println("Found registry path:", registryPath)
 		// Load libusb-1.0.dll first (dependency)
 		libusbPath := filepath.Join(registryPath, "libusb-1.0.dll")
+		fmt.Println("libusbPath:", libusbPath)
 		if _, err := syscall.LoadLibrary(libusbPath); err != nil {
 			fmt.Println("Warning: Failed to load libusb-1.0.dll from", libusbPath, "Error:", err)
 		}
@@ -35,6 +36,7 @@ func loadDLLs() {
 		if handle, err := syscall.LoadLibrary(usbPath); err == nil {
 			UsbDeviceDLL = handle
 			fmt.Println("Loaded x86 DLLs from registry path:", registryPath)
+			loadProcAddresses()
 			return
 		} else {
 			fmt.Println("Failed to load USB2XXX.dll from", usbPath, "Error:", err)
@@ -47,6 +49,7 @@ func loadDLLs() {
 	_, _ = syscall.LoadLibrary(".\\DLLs\\windows_x86\\libusb-1.0.dll")
 	UsbDeviceDLL, _ = syscall.LoadLibrary(".\\DLLs\\windows_x86\\USB2XXX.dll")
 	fmt.Println("Loaded x86 DLLs from default path")
+	loadProcAddresses()
 }
 
 func getRegistryPath() string {

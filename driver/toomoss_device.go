@@ -8,12 +8,24 @@ import (
 )
 
 var (
-	UsbScanDevice, _  = syscall.GetProcAddress(UsbDeviceDLL, "USB_ScanDevice")
-	UsbOpenDevice, _  = syscall.GetProcAddress(UsbDeviceDLL, "USB_OpenDevice")
-	UsbCloseDevice, _ = syscall.GetProcAddress(UsbDeviceDLL, "USB_CloseDevice")
-	DevHandle         [10]int
-	DEVIndex          = 0
+	UsbScanDevice  uintptr
+	UsbOpenDevice  uintptr
+	UsbCloseDevice uintptr
+	DevHandle      [10]int
+	DEVIndex       = 0
 )
+
+func loadProcAddresses() {
+	UsbScanDevice, _ = syscall.GetProcAddress(UsbDeviceDLL, "USB_ScanDevice")
+	UsbOpenDevice, _ = syscall.GetProcAddress(UsbDeviceDLL, "USB_OpenDevice")
+	UsbCloseDevice, _ = syscall.GetProcAddress(UsbDeviceDLL, "USB_CloseDevice")
+
+	CANFDInit, _ = syscall.GetProcAddress(UsbDeviceDLL, "CANFD_Init")
+	CANFDStartGetMsg, _ = syscall.GetProcAddress(UsbDeviceDLL, "CANFD_StartGetMsg")
+	CANFD_GetMsg, _ = syscall.GetProcAddress(UsbDeviceDLL, "CANFD_GetMsg")
+	CANFD_SendMsg, _ = syscall.GetProcAddress(UsbDeviceDLL, "CANFD_SendMsg")
+	CANFD_GetCANSpeedArg, _ = syscall.GetProcAddress(UsbDeviceDLL, "CANFD_GetCANSpeedArg")
+}
 
 func UsbScan() bool {
 	ret2, _, _ := syscall.SyscallN(

@@ -21,11 +21,11 @@ const (
 )
 
 var (
-	CANFDInit, _            = syscall.GetProcAddress(UsbDeviceDLL, "CANFD_Init")
-	CANFDStartGetMsg, _     = syscall.GetProcAddress(UsbDeviceDLL, "CANFD_StartGetMsg")
-	CANFD_GetMsg, _         = syscall.GetProcAddress(UsbDeviceDLL, "CANFD_GetMsg")
-	CANFD_SendMsg, _        = syscall.GetProcAddress(UsbDeviceDLL, "CANFD_SendMsg")
-	CANFD_GetCANSpeedArg, _ = syscall.GetProcAddress(UsbDeviceDLL, "CANFD_GetCANSpeedArg")
+	CANFDInit            uintptr
+	CANFDStartGetMsg     uintptr
+	CANFD_GetMsg         uintptr
+	CANFD_SendMsg        uintptr
+	CANFD_GetCANSpeedArg uintptr
 )
 
 type CANFD_INIT_CONFIG struct {
