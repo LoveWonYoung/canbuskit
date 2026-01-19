@@ -12,14 +12,6 @@ import (
 	"unsafe"
 )
 
-// 缓冲区和轮询配置常量
-const (
-	RxChannelBufferSize = 1024                  // 接收通道缓冲区大小
-	MsgBufferSize       = 1024                  // 消息缓冲区大小
-	PollingInterval     = time.Millisecond      // 轮询间隔
-	InitDelay           = 20 * time.Millisecond // 初始化延迟
-)
-
 var (
 	CANFDInit            uintptr
 	CANFDStartGetMsg     uintptr
@@ -103,13 +95,6 @@ const (
 	CANFD_MSG_FLAG_ESI = 0x02 // CANFD错误状态指示
 	CANFD_MSG_FLAG_FDF = 0x04 // CANFD帧标志
 )
-
-const (
-	CAN CanType = iota
-	CANFD
-)
-
-type CanType byte
 
 type CanMix struct {
 	rxChan  chan UnifiedCANMessage

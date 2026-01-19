@@ -39,21 +39,7 @@ type MockCANResponse struct {
 	Delay       time.Duration // 响应延迟
 }
 
-// CanType 定义 CAN 类型 (与 Windows 版本保持一致)
-type CanType byte
-
-const (
-	CAN   CanType = 0
-	CANFD CanType = 1
-)
-
 // 缓冲区配置常量
-const (
-	RxChannelBufferSize = 1024
-	MsgBufferSize       = 1024
-	PollingInterval     = time.Millisecond
-	InitDelay           = 20 * time.Millisecond
-)
 
 // NewCanMix 创建一个新的虚拟 CAN 设备实例
 func NewCanMix(canType CanType) *MockCanMix {
