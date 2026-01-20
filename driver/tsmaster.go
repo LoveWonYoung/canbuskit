@@ -129,15 +129,7 @@ func NewTSMasterLoader() (*TSMasterLoader, error) {
 
 // findDLLPath 查找DLL文件路径
 func (t *TSMasterLoader) findDLLPath() (string, error) {
-	// 1. 首先尝试从注册表获取
-	if path, err := t.getDLLFromRegistry(); err == nil && path != "" {
-		dllPath := filepath.Join(filepath.Dir(path), "TSMaster.dll")
-		if t.fileExists(dllPath) {
-			return dllPath, nil
-		}
-	}
-
-	// 2. 如果注册表失败，使用默认路径
+	// 1. 先尝试使用当前可执行文件所在目录
 	currPath, err := os.Executable()
 	if err != nil {
 		currPath = "C:\\Program Files (x86)\\TOSUN\\TSMaster"
@@ -152,11 +144,19 @@ func (t *TSMasterLoader) findDLLPath() (string, error) {
 		dllPath = filepath.Join(currPath, "bin64", "TSMaster.dll")
 	}
 
-	if !t.fileExists(dllPath) {
-		return "", fmt.Errorf("TSMaster.dll not found in registry or default paths")
+	if t.fileExists(dllPath) {
+		return dllPath, nil
 	}
 
-	return dllPath, nil
+	// 2. 如果当前路径未找到，再从注册表获取
+	if path, err := t.getDLLFromRegistry(); err == nil && path != "" {
+		dllPath = filepath.Join(filepath.Dir(path), "TSMaster.dll")
+		if t.fileExists(dllPath) {
+			return dllPath, nil
+		}
+	}
+
+	return "", fmt.Errorf("TSMaster.dll not found in default or registry paths")
 }
 
 // getDLLFromRegistry 从注册表获取DLL路径
