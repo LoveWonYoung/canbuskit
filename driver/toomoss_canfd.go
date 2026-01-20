@@ -46,31 +46,6 @@ type CANFD_MSG struct {
 	Data      [64]byte
 }
 
-// dataLenToDlc 将CAN/CAN-FD的DLC码转换为实际的数据字节长度
-func dataLenToDlc(dlc byte) int {
-	if dlc <= 8 && dlc > 0 {
-		return int(dlc)
-	}
-	switch {
-	case dlc <= 12:
-		return 9
-	case dlc <= 16:
-		return 10
-	case dlc <= 20:
-		return 11
-	case dlc <= 24:
-		return 12
-	case dlc <= 32:
-		return 13
-	case dlc <= 48:
-		return 14
-	case dlc <= 64:
-		return 15
-	default:
-		return 15 // 对于无效值，默认返回15
-	}
-}
-
 const (
 	CanChannel  = 0
 	SpeedBpsNBT = 500_000
@@ -101,17 +76,6 @@ type CanMix struct {
 	ctx     context.Context
 	cancel  context.CancelFunc
 	canType CanType
-}
-
-// logCANMessage 统一的CAN消息日志记录函数
-func logCANMessage(direction string, id uint32, dlc byte, data []byte, canType CanType) {
-	typeStr := "CANFD"
-	if canType == CAN {
-		typeStr = "CAN  "
-	}
-	format := "%s %s: ID=0x%03X, DLC=%02d, Data=% 02X"
-	log.Printf(format, direction, typeStr, id, dataLenToDlc(dlc), data)
-	// fmt.Printf(format+"\n", direction, typeStr, id, dataLenToDlc(dlc), data)
 }
 
 func NewCanMix(canType CanType) *CanMix {
@@ -190,7 +154,7 @@ func (c *CanMix) readLoop() {
 
 			for i := 0; i < int(getCanFDMsgNum); i++ {
 				msg := canFDMsg[i]
-				actualLen := dataLenToDlc(msg.DLC)
+				actualLen := dlcToLen(msg.DLC)
 				if actualLen == 0 {
 					continue
 				}
@@ -205,7 +169,7 @@ func (c *CanMix) readLoop() {
 				} else {
 					msgType = CANFD
 				}
-				logCANMessage("RX", unifiedMsg.ID, unifiedMsg.DLC, unifiedMsg.Data[:unifiedMsg.DLC], msgType)
+				logCANMessage("RX", unifiedMsg.ID, dataLenToDlc(int(unifiedMsg.DLC)), unifiedMsg.Data[:msg.DLC], msgType)
 
 				select {
 				case c.rxChan <- unifiedMsg:
@@ -266,7 +230,7 @@ func (c *CanMix) Write(id int32, data []byte) error {
 	sendRet, _, _ := syscall.SyscallN(CANFD_SendMsg, uintptr(DevHandle[DEVIndex]), uintptr(CanChannel), uintptr(unsafe.Pointer(&canFDMsg[0])), uintptr(len(canFDMsg)))
 
 	if int(sendRet) == len(canFDMsg) {
-		logCANMessage("TX", uint32(id), byte(len(data)), canFDMsg[0].Data[:canFDMsg[0].DLC], c.canType)
+		logCANMessage("TX", uint32(id), dataLenToDlc(len(data)), canFDMsg[0].Data[:canFDMsg[0].DLC], c.canType)
 	} else {
 		log.Printf("错误: CAN/CANFD消息发送失败, ID=0x%03X", id)
 		return errors.New("CAN/CANFD消息发送失败")

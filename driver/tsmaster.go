@@ -3,11 +3,20 @@
 package driver
 
 import (
+	"context"
 	"fmt"
-	"golang.org/x/sys/windows/registry"
+	"log"
+	"math"
 	"os"
 	"path/filepath"
 	"runtime"
+	"syscall"
+	"time"
+
+	// "time"
+	"unsafe"
+
+	"golang.org/x/sys/windows/registry"
 )
 
 // findTSMasterDLL 查找TSMaster DLL文件路径
@@ -202,21 +211,58 @@ type TLIBCAN struct {
 	FTimeUs     int64    // 时间戳
 	FData       [8]uint8 // 报文数据
 }
+type TLIBCANFD struct {
+	FIdxChn       uint8 // 通道
+	FProperties   uint8 // 属性定义：[7] 0-normal frame, 1-error frame
+	FDLC          uint8 //dlc from 0 to 15
+	FFDProperties uint8
+	FIdentifier   int32     // ID
+	FTimeUs       int64     // 时间戳
+	FData         [64]uint8 // 报文数据
+}
 
-var t CANDriver = &TSMaster{}
-
+// class TLIBCANFD(Structure):
+//
+//	'''
+//	CANFD报文结构体
+//	关联函数：
+//	tsapp_transmit_canfd_async 发送报文
+//	tsfifo_receive_canfd_msgs  接收报文
+//	'''
+//	_pack_ = 1
+//	_fields_ = [("FIdxChn", c_uint8),       #通道
+//	            ("FProperties", c_uint8),   #属性 # [7] 0-normal frame, 1-error frame
+//	                                        # [6] 0-not logged, 1-already logged
+//	                                        # [5-3] tbd
+//	                                        # [2] 0-std frame, 1-extended frame
+//	                                        # [1] 0-data frame, 1-remote frame
+//	                                        # [0] dir: 0-RX, 1-TX
+//	            ("FDLC", c_uint8),          # dlc from 0 to 15
+//	            ("FFDProperties", c_uint8), #FD属性
+//	                                        # [2] ESI, The E RROR S TATE I NDICATOR (ESI) flag is transmitted dominant by error active nodes, recessive by error passive nodes. ESI does not exist in CAN format frames
+//	                                        # [1] BRS, If the bit is transmitted recessive, the bit rate is switched from the standard bit rate of the A RBITRATION P HASE to the preconfigured alternate bit rate of the D ATA P HASE . If it is transmitted dominant, the bit rate is not switched. BRS does not exist in CAN format frames.
+//	                                        # [0] EDL: 0-normal CAN frame, 1-FD frame, added 2020-02-12, The E XTENDED D
+//	            ("FIdentifier", c_int32),   #ID
+//	            ("FTimeUs", c_uint64),   #时间戳
+//	            ("FData", c_uint8 * 64),    #数据
+//	            ]
 type TSMaster struct {
 	loader      *TSMasterLoader
 	isConnected bool
 	rxChan      chan UnifiedCANMessage
 	ctx         context.Context
 	cancel      context.CancelFunc
-	cantype     CanType
+	canType     CanType
 }
-type CanType byte
 
 func NewTSMaster(cantype CanType) *TSMaster {
-	return &TSMaster{cantype: cantype}
+	ctx, cancel := context.WithCancel(context.Background())
+	return &TSMaster{
+		rxChan:  make(chan UnifiedCANMessage, RxChannelBufferSize),
+		ctx:     ctx,
+		cancel:  cancel,
+		canType: cantype,
+	}
 }
 
 func (t *TSMaster) Init() error {
@@ -266,7 +312,18 @@ func (t *TSMaster) Init() error {
 		uintptr(1), // True
 	)
 	fmt.Printf("Set mapping verbose result: %d\n", r)
-
+	//tsapp_configure_baudrate_canfd(0, 500.0, 2000.0, 1, 0, True):
+	br := float32(500.0)
+	bd := float32(2000.0)
+	r, _, _ = t.loader.GetProcAddress("tsapp_configure_baudrate_canfd").Call(
+		uintptr(0),
+		uintptr(math.Float32bits(br)),
+		uintptr(math.Float32bits(bd)),
+		uintptr(1),
+		uintptr(0),
+		uintptr(1),
+	)
+	fmt.Printf("canfd init: %d\n", r)
 	// 连接设备
 	r, _, _ = t.loader.GetProcAddress("tsapp_connect").Call()
 	fmt.Printf("Connect result: %d\n", r)
@@ -287,6 +344,53 @@ func (t *TSMaster) Start() {
 	}
 	fmt.Println("TSMaster started")
 	// 这里可以启动接收线程等
+	go t.readLoop()
+}
+func (t *TSMaster) readLoop() {
+	ticker := time.NewTicker(PollingInterval)
+	defer ticker.Stop()
+	var canfdMsg [MsgBufferSize]TLIBCANFD
+	for {
+		select {
+		case <-t.ctx.Done():
+			return
+		case <-ticker.C:
+			var size = int32(MsgBufferSize)
+			if r, _, _ := t.loader.GetProcAddress("tsfifo_receive_canfd_msgs").Call(
+				uintptr(unsafe.Pointer(&canfdMsg[0])),
+				uintptr(unsafe.Pointer(&size)),
+				uintptr(0),
+				uintptr(1),
+			); r != 0 {
+				continue
+			}
+			for i := 0; i < int(size); i++ {
+				msg := canfdMsg[i]
+				actualLen := msg.FDLC
+				if actualLen == 0 {
+					continue
+				}
+				unifiedMsg := UnifiedCANMessage{
+					ID: uint32(msg.FIdentifier), DLC: msg.FDLC, Data: msg.FData, IsFD: msg.FFDProperties == 1,
+				}
+
+				// 使用统一的日志函数
+				msgType := t.canType
+				if msg.FFDProperties == 0 {
+					msgType = CAN
+				} else {
+					msgType = CANFD
+				}
+				logCANMessage("RX", unifiedMsg.ID, unifiedMsg.DLC, unifiedMsg.Data[:dlcToLen(unifiedMsg.DLC)], msgType)
+
+				select {
+				case t.rxChan <- unifiedMsg:
+				default:
+					log.Println("警告: 驱动接收channel(FD)已满，消息被丢弃")
+				}
+			}
+		}
+	}
 }
 func (t *TSMaster) Stop() {
 	if t.cancel != nil {
@@ -312,27 +416,23 @@ func (t *TSMaster) Stop() {
 	fmt.Println("TSMaster stopped")
 }
 func (t *TSMaster) Write(id int32, data []byte) error {
-	if !t.isConnected || t.loader == nil {
-		return fmt.Errorf("TSMaster not connected")
+	var canfdMsg TLIBCANFD
+	canfdMsg.FIdxChn = 0
+	canfdMsg.FIdentifier = id
+	canfdMsg.FProperties = 1
+	canfdMsg.FDLC = dataLenToDlc(len(data))
+	if len(data) < 8 {
+		canfdMsg.FDLC = 8
 	}
-
-	var canMsg TLIBCAN
-	canMsg.FIdxChn = 0
-	canMsg.FIdentifier = id
-	canMsg.FDLC = uint8(len(data))
-	if canMsg.FDLC > 8 {
-		canMsg.FDLC = 8
-	}
-	canMsg.FProperties = 1
-
+	canfdMsg.FFDProperties = uint8(t.canType)
 	// 复制数据到CAN消息
-	for i := 0; i < int(canMsg.FDLC) && i < len(data); i++ {
-		canMsg.FData[i] = data[i]
+	maxLen := dlcToLen(canfdMsg.FDLC)
+	for i := 0; i < maxLen && i < len(data); i++ {
+		canfdMsg.FData[i] = data[i]
 	}
-
-	r, _, _ := t.loader.GetProcAddress("tsapp_transmit_can_async").Call(uintptr(unsafe.Pointer(&canMsg)))
-	fmt.Printf("Send CAN message result: %d\n", r)
-
+	if r, _, _ := t.loader.GetProcAddress("tsapp_transmit_canfd_async").Call(uintptr(unsafe.Pointer(&canfdMsg))); r != 0 {
+		return fmt.Errorf("failed to send CAN-FD message, result code: %d", r)
+	}
 	return nil
 }
 func (t *TSMaster) RxChan() <-chan UnifiedCANMessage {

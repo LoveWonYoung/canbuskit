@@ -3,8 +3,9 @@ package driver
 import (
 	"errors"
 	"fmt"
-    "github.com/LoveWonYoung/canbuskit/tp_layer"
 	"log"
+
+	"github.com/LoveWonYoung/canbuskit/tp_layer"
 )
 
 // _toomoss_adapter.go (与 main.go 放在同一目录下)
@@ -57,9 +58,8 @@ func (t *ToomossAdapter) RxFunc() (tp_layer.CanMessage, bool) {
 			return tp_layer.CanMessage{}, false
 		}
 
-		// 假设您的驱动层已经将DLC转换为实际的数据字节长度。
-		// 这是适配器的常见做法。
-		payloadLength := int(receivedMsg.DLC)
+		// 使用 DLC 转换表获取实际数据长度（CAN-FD 下 DLC 不是直接长度）。
+		payloadLength := dlcToLen(receivedMsg.DLC)
 
 		// 添加一个安全检查，防止因DLC值错误导致的panic
 		if payloadLength > len(receivedMsg.Data) {
