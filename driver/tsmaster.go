@@ -140,16 +140,16 @@ func (t *TSMasterLoader) findDLLPath() (string, error) {
 	// 2. 如果注册表失败，使用默认路径
 	currPath, err := os.Executable()
 	if err != nil {
-		currPath = "."
+		currPath = "C:\\Program Files (x86)\\TOSUN\\TSMaster"
 	} else {
 		currPath = filepath.Dir(currPath)
 	}
 
 	var dllPath string
 	if runtime.GOARCH == "386" {
-		dllPath = filepath.Join(currPath, "windows", "bin", "TSMaster.dll")
+		dllPath = filepath.Join(currPath, "bin", "TSMaster.dll")
 	} else {
-		dllPath = filepath.Join(currPath, "windows", "bin64", "TSMaster.dll")
+		dllPath = filepath.Join(currPath, "bin64", "TSMaster.dll")
 	}
 
 	if !t.fileExists(dllPath) {
@@ -221,31 +221,6 @@ type TLIBCANFD struct {
 	FData         [64]uint8 // 报文数据
 }
 
-// class TLIBCANFD(Structure):
-//
-//	'''
-//	CANFD报文结构体
-//	关联函数：
-//	tsapp_transmit_canfd_async 发送报文
-//	tsfifo_receive_canfd_msgs  接收报文
-//	'''
-//	_pack_ = 1
-//	_fields_ = [("FIdxChn", c_uint8),       #通道
-//	            ("FProperties", c_uint8),   #属性 # [7] 0-normal frame, 1-error frame
-//	                                        # [6] 0-not logged, 1-already logged
-//	                                        # [5-3] tbd
-//	                                        # [2] 0-std frame, 1-extended frame
-//	                                        # [1] 0-data frame, 1-remote frame
-//	                                        # [0] dir: 0-RX, 1-TX
-//	            ("FDLC", c_uint8),          # dlc from 0 to 15
-//	            ("FFDProperties", c_uint8), #FD属性
-//	                                        # [2] ESI, The E RROR S TATE I NDICATOR (ESI) flag is transmitted dominant by error active nodes, recessive by error passive nodes. ESI does not exist in CAN format frames
-//	                                        # [1] BRS, If the bit is transmitted recessive, the bit rate is switched from the standard bit rate of the A RBITRATION P HASE to the preconfigured alternate bit rate of the D ATA P HASE . If it is transmitted dominant, the bit rate is not switched. BRS does not exist in CAN format frames.
-//	                                        # [0] EDL: 0-normal CAN frame, 1-FD frame, added 2020-02-12, The E XTENDED D
-//	            ("FIdentifier", c_int32),   #ID
-//	            ("FTimeUs", c_uint64),   #时间戳
-//	            ("FData", c_uint8 * 64),    #数据
-//	            ]
 type TSMaster struct {
 	loader      *TSMasterLoader
 	isConnected bool
