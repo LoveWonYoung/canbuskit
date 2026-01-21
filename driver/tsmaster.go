@@ -346,9 +346,9 @@ func (t *TSMaster) readLoop() {
 				} else {
 					msgType = CANFD
 				}
-				if canfdMsg[i].FFDProperties&1 == 1 {
+				if canfdMsg[i].FProperties&1 == 1 {
 					logCANMessage("TX", unifiedMsg.ID, unifiedMsg.DLC, unifiedMsg.Data[:dlcToLen(unifiedMsg.DLC)], msgType)
-				} else {
+				} else if canfdMsg[i].FProperties&1 == 0 {
 					logCANMessage("RX", unifiedMsg.ID, unifiedMsg.DLC, unifiedMsg.Data[:dlcToLen(unifiedMsg.DLC)], msgType)
 				}
 
