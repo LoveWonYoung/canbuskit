@@ -22,17 +22,10 @@ import (
 // findTSMasterDLL 查找TSMaster DLL文件路径
 func findTSMasterDLL() (string, error) {
 	var dllPath string
+	basePath := "C:\\Program Files (x86)\\TOSUN\\TSMaster"
 
 	// 定义注册表路径
 	tsmasterLocation := `Software\TOSUN\TSMaster`
-
-	// 获取当前执行文件所在目录
-	currPath, err := os.Executable()
-	if err != nil {
-		currPath = "."
-	} else {
-		currPath = filepath.Dir(currPath)
-	}
 
 	// 获取系统架构
 	arch := runtime.GOARCH
@@ -47,9 +40,9 @@ func findTSMasterDLL() (string, error) {
 
 	// 如果注册表中没有找到，使用默认路径
 	if arch == "386" {
-		dllPath = filepath.Join(currPath, "windows", "bin", "TSMaster.dll")
+		dllPath = filepath.Join(basePath, "bin", "TSMaster.dll")
 	} else {
-		dllPath = filepath.Join(currPath, "windows", "bin64", "TSMaster.dll")
+		dllPath = filepath.Join(basePath, "bin64", "TSMaster.dll")
 	}
 
 	// 检查文件是否存在
@@ -129,23 +122,21 @@ func NewTSMasterLoader() (*TSMasterLoader, error) {
 
 // findDLLPath 查找DLL文件路径
 func (t *TSMasterLoader) findDLLPath() (string, error) {
-	// 1. 先尝试使用当前可执行文件所在目录
-	currPath, err := os.Executable()
-	if err != nil {
-		currPath = "C:\\Program Files (x86)\\TOSUN\\TSMaster"
-	} else {
-		currPath = filepath.Dir(currPath)
-	}
+	// 1. 从默认安装目录查找
+	basePath := "C:\\Program Files (x86)\\TOSUN\\TSMaster"
 
 	var dllPath string
 	if runtime.GOARCH == "386" {
-		dllPath = filepath.Join(currPath, "bin", "TSMaster.dll")
+		dllPath = filepath.Join(basePath, "bin", "TSMaster.dll")
 	} else {
-		dllPath = filepath.Join(currPath, "bin64", "TSMaster.dll")
+		dllPath = filepath.Join(basePath, "bin64", "TSMaster.dll")
 	}
 
 	if t.fileExists(dllPath) {
+		fmt.Println("find dll ", dllPath)
 		return dllPath, nil
+	} else {
+		fmt.Println("not find dll ", dllPath)
 	}
 
 	// 2. 如果当前路径未找到，再从注册表获取
