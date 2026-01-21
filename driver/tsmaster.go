@@ -339,7 +339,6 @@ func (t *TSMaster) readLoop() {
 				unifiedMsg := UnifiedCANMessage{
 					ID: uint32(msg.FIdentifier), DLC: msg.FDLC, Data: msg.FData, IsFD: msg.FFDProperties == 1,
 				}
-
 				// 使用统一的日志函数
 				msgType := t.canType
 				if msg.FFDProperties == 0 {
@@ -347,7 +346,11 @@ func (t *TSMaster) readLoop() {
 				} else {
 					msgType = CANFD
 				}
-				logCANMessage("RX", unifiedMsg.ID, unifiedMsg.DLC, unifiedMsg.Data[:dlcToLen(unifiedMsg.DLC)], msgType)
+				if canfdMsg[i].FFDProperties&1 == 1 {
+					logCANMessage("TX", unifiedMsg.ID, unifiedMsg.DLC, unifiedMsg.Data[:dlcToLen(unifiedMsg.DLC)], msgType)
+				} else {
+					logCANMessage("RX", unifiedMsg.ID, unifiedMsg.DLC, unifiedMsg.Data[:dlcToLen(unifiedMsg.DLC)], msgType)
+				}
 
 				select {
 				case t.rxChan <- unifiedMsg:
