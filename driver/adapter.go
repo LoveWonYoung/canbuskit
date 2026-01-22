@@ -20,7 +20,7 @@ func NewAdapter(dev CANDriver) (*Adapter, error) {
 		return nil, errors.New("CAN driver instance cannot be nil")
 	}
 	if err := dev.Init(); err != nil {
-		return nil, fmt.Errorf("failed to initialize toomoss device: %w", err)
+		return nil, fmt.Errorf("failed to initialize CAN device: %w", err)
 	}
 	dev.Start()
 
@@ -29,13 +29,13 @@ func NewAdapter(dev CANDriver) (*Adapter, error) {
 		rxChan: dev.RxChan(),
 	}
 
-	log.Println("Toomoss-Adapter created and device started successfully.")
+	log.Println("CAN adapter created and device started successfully.")
 	return adapter, nil
 }
 
 // Close 用于停止驱动并释放资源
 func (t *Adapter) Close() {
-	log.Println("Closing Toomoss-Adapter...")
+	log.Println("Closing CAN adapter...")
 	t.driver.Stop()
 }
 
