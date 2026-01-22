@@ -34,31 +34,74 @@ const (
 
 // UDS 负响应码 (Negative Response Code)
 const (
-	NRCGeneralReject                          = 0x10 // 一般拒绝
-	NRCServiceNotSupported                    = 0x11 // 服务不支持
-	NRCSubFunctionNotSupported                = 0x12 // 子功能不支持
-	NRCIncorrectMessageLength                 = 0x13 // 消息长度错误
-	NRCResponseTooLong                        = 0x14 // 响应过长
-	NRCBusyRepeatRequest                      = 0x21 // 忙，请重复请求
-	NRCConditionsNotCorrect                   = 0x22 // 条件不满足
-	NRCRequestSequenceError                   = 0x24 // 请求顺序错误
-	NRCNoResponseFromSubnetComponent          = 0x25 // 子网组件无响应
-	NRCFailurePreventsExecution               = 0x26 // 故障阻止执行
-	NRCRequestOutOfRange                      = 0x31 // 请求超出范围
-	NRCSecurityAccessDenied                   = 0x33 // 安全访问被拒绝
-	NRCInvalidKey                             = 0x35 // 无效密钥
-	NRCExceedNumberOfAttempts                 = 0x36 // 超过尝试次数
-	NRCRequiredTimeDelayNotExpired            = 0x37 // 所需时间延迟未过期
-	NRCUploadDownloadNotAccepted              = 0x70 // 上传/下载不接受
-	NRCTransferDataSuspended                  = 0x71 // 传输数据暂停
-	NRCGeneralProgrammingFailure              = 0x72 // 一般编程失败
-	NRCWrongBlockSequenceCounter              = 0x73 // 块序号计数器错误
-	NRCResponsePending                        = 0x78 // 响应挂起
-	NRCSubFunctionNotSupportedInActiveSession = 0x7E // 子功能在当前会话不支持
-	NRCServiceNotSupportedInActiveSession     = 0x7F // 服务在当前会话不支持
+	PositiveResponse                                  = 0x00
+	GeneralReject                                     = 0x10
+	ServiceNotSupported                               = 0x11
+	SubFunctionNotSupported                           = 0x12
+	IncorrectMessageLengthOrInvalidFormat             = 0x13
+	ResponseTooLong                                   = 0x14
+	BusyRepeatRequest                                 = 0x21
+	ConditionsNotCorrect                              = 0x22
+	RequestSequenceError                              = 0x24
+	NoResponseFromSubnetComponent                     = 0x25
+	FailurePreventsExecutionOfRequestedAction         = 0x26
+	RequestOutOfRange                                 = 0x31
+	SecurityAccessDenied                              = 0x33
+	AuthenticationRequired                            = 0x34
+	InvalidKey                                        = 0x35
+	ExceedNumberOfAttempts                            = 0x36
+	RequiredTimeDelayNotExpired                       = 0x37
+	SecureDataTransmissionRequired                    = 0x38
+	SecureDataTransmissionNotAllowed                  = 0x39
+	SecureDataVerificationFailed                      = 0x3A
+	CertificateVerificationFailed_InvalidTimePeriod   = 0x50
+	CertificateVerificationFailed_InvalidSignature    = 0x51
+	CertificateVerificationFailed_InvalidChainOfTrust = 0x52
+	CertificateVerificationFailed_InvalidType         = 0x53
+	CertificateVerificationFailed_InvalidFormat       = 0x54
+	CertificateVerificationFailed_InvalidContent      = 0x55
+	CertificateVerificationFailed_InvalidScope        = 0x56
+	CertificateVerificationFailed_InvalidCertificate  = 0x57
+	OwnershipVerificationFailed                       = 0x58
+	ChallengeCalculationFailed                        = 0x59
+	SettingAccessRightsFailed                         = 0x5A
+	SessionKeyCreationDerivationFailed                = 0x5B
+	ConfigurationDataUsageFailed                      = 0x5C
+	DeAuthenticationFailed                            = 0x5D
+	UploadDownloadNotAccepted                         = 0x70
+	TransferDataSuspended                             = 0x71
+	GeneralProgrammingFailure                         = 0x72
+	WrongBlockSequenceCounter                         = 0x73
+	RequestCorrectlyReceived_ResponsePending          = 0x78
+	SubFunctionNotSupportedInActiveSession            = 0x7E
+	ServiceNotSupportedInActiveSession                = 0x7F
+	RpmTooHigh                                        = 0x81
+	RpmTooLow                                         = 0x82
+	EngineIsRunning                                   = 0x83
+	EngineIsNotRunning                                = 0x84
+	EngineRunTimeTooLow                               = 0x85
+	TemperatureTooHigh                                = 0x86
+	TemperatureTooLow                                 = 0x87
+	VehicleSpeedTooHigh                               = 0x88
+	VehicleSpeedTooLow                                = 0x89
+	ThrottlePedalTooHigh                              = 0x8A
+	ThrottlePedalTooLow                               = 0x8B
+	TransmissionRangeNotInNeutral                     = 0x8C
+	TransmissionRangeNotInGear                        = 0x8D
+	BrakeSwitchNotClosed                              = 0x8F
+	ShifterLeverNotInPark                             = 0x90
+	TorqueConverterClutchLocked                       = 0x91
+	VoltageTooHigh                                    = 0x92
+	VoltageTooLow                                     = 0x93
+	ResourceTemporarilyNotAvailable                   = 0x94
+	TerminationWithSignatureRequested                 = 0x3B
+	AccessDenied                                      = 0x3C
+	VersionNotSupported                               = 0x3D
+	SecuredLinkNotSupported                           = 0x3E
+	CertificateNotAvailable                           = 0x3F
+	AuditTrailInformationNotAvailable                 = 0x40
 )
 
-// UDSError 表示 UDS 负响应错误
 type UDSError struct {
 	ServiceID byte   // 原始服务 ID
 	NRC       byte   // 负响应码
@@ -72,7 +115,7 @@ func (e *UDSError) Error() string {
 // IsRetryable 判断该错误是否可以重试
 func (e *UDSError) IsRetryable() bool {
 	switch e.NRC {
-	case NRCBusyRepeatRequest, NRCResponsePending:
+	case BusyRepeatRequest, RequestCorrectlyReceived_ResponsePending:
 		return true
 	default:
 		return false
@@ -105,28 +148,72 @@ func DefaultRequestOptions() RequestOptions {
 
 // nrcDescriptions 缓存 NRC 错误描述，避免重复创建 map
 var nrcDescriptions = map[byte]string{
-	NRCGeneralReject:                          "一般拒绝",
-	NRCServiceNotSupported:                    "服务不支持",
-	NRCSubFunctionNotSupported:                "子功能不支持",
-	NRCIncorrectMessageLength:                 "消息长度错误",
-	NRCResponseTooLong:                        "响应过长",
-	NRCBusyRepeatRequest:                      "忙，请重复请求",
-	NRCConditionsNotCorrect:                   "条件不满足",
-	NRCRequestSequenceError:                   "请求顺序错误",
-	NRCNoResponseFromSubnetComponent:          "子网组件无响应",
-	NRCFailurePreventsExecution:               "故障阻止执行",
-	NRCRequestOutOfRange:                      "请求超出范围",
-	NRCSecurityAccessDenied:                   "安全访问被拒绝",
-	NRCInvalidKey:                             "无效密钥",
-	NRCExceedNumberOfAttempts:                 "超过尝试次数",
-	NRCRequiredTimeDelayNotExpired:            "所需时间延迟未过期",
-	NRCUploadDownloadNotAccepted:              "上传/下载不接受",
-	NRCTransferDataSuspended:                  "传输数据暂停",
-	NRCGeneralProgrammingFailure:              "一般编程失败",
-	NRCWrongBlockSequenceCounter:              "块序号计数器错误",
-	NRCResponsePending:                        "响应挂起",
-	NRCSubFunctionNotSupportedInActiveSession: "子功能在当前会话不支持",
-	NRCServiceNotSupportedInActiveSession:     "服务在当前会话不支持",
+	PositiveResponse:                                  "PositiveResponse",
+	GeneralReject:                                     "GeneralReject",
+	ServiceNotSupported:                               "ServiceNotSupported",
+	SubFunctionNotSupported:                           "SubFunctionNotSupported",
+	IncorrectMessageLengthOrInvalidFormat:             "IncorrectMessageLengthOrInvalidFormat",
+	ResponseTooLong:                                   "ResponseTooLong",
+	BusyRepeatRequest:                                 "BusyRepeatRequest",
+	ConditionsNotCorrect:                              "ConditionsNotCorrect",
+	RequestSequenceError:                              "RequestSequenceError",
+	NoResponseFromSubnetComponent:                     "NoResponseFromSubnetComponent",
+	FailurePreventsExecutionOfRequestedAction:         "FailurePreventsExecutionOfRequestedAction",
+	RequestOutOfRange:                                 "RequestOutOfRange",
+	SecurityAccessDenied:                              "SecurityAccessDenied",
+	AuthenticationRequired:                            "AuthenticationRequired",
+	InvalidKey:                                        "InvalidKey",
+	ExceedNumberOfAttempts:                            "ExceedNumberOfAttempts",
+	RequiredTimeDelayNotExpired:                       "RequiredTimeDelayNotExpired",
+	SecureDataTransmissionRequired:                    "SecureDataTransmissionRequired",
+	SecureDataTransmissionNotAllowed:                  "SecureDataTransmissionNotAllowed",
+	SecureDataVerificationFailed:                      "SecureDataVerificationFailed",
+	CertificateVerificationFailed_InvalidTimePeriod:   "CertificateVerificationFailed_InvalidTimePeriod",
+	CertificateVerificationFailed_InvalidSignature:    "CertificateVerificationFailed_InvalidSignature",
+	CertificateVerificationFailed_InvalidChainOfTrust: "CertificateVerificationFailed_InvalidChainOfTrust",
+	CertificateVerificationFailed_InvalidType:         "CertificateVerificationFailed_InvalidType",
+	CertificateVerificationFailed_InvalidFormat:       "CertificateVerificationFailed_InvalidFormat",
+	CertificateVerificationFailed_InvalidContent:      "CertificateVerificationFailed_InvalidContent",
+	CertificateVerificationFailed_InvalidScope:        "CertificateVerificationFailed_InvalidScope",
+	CertificateVerificationFailed_InvalidCertificate:  "CertificateVerificationFailed_InvalidCertificate",
+	OwnershipVerificationFailed:                       "OwnershipVerificationFailed",
+	ChallengeCalculationFailed:                        "ChallengeCalculationFailed",
+	SettingAccessRightsFailed:                         "SettingAccessRightsFailed",
+	SessionKeyCreationDerivationFailed:                "SessionKeyCreationDerivationFailed",
+	ConfigurationDataUsageFailed:                      "ConfigurationDataUsageFailed",
+	DeAuthenticationFailed:                            "DeAuthenticationFailed",
+	UploadDownloadNotAccepted:                         "UploadDownloadNotAccepted",
+	TransferDataSuspended:                             "TransferDataSuspended",
+	GeneralProgrammingFailure:                         "GeneralProgrammingFailure",
+	WrongBlockSequenceCounter:                         "WrongBlockSequenceCounter",
+	RequestCorrectlyReceived_ResponsePending:          "RequestCorrectlyReceived_ResponsePending",
+	SubFunctionNotSupportedInActiveSession:            "SubFunctionNotSupportedInActiveSession",
+	ServiceNotSupportedInActiveSession:                "ServiceNotSupportedInActiveSession",
+	RpmTooHigh:                                        "RpmTooHigh",
+	RpmTooLow:                                         "RpmTooLow",
+	EngineIsRunning:                                   "EngineIsRunning",
+	EngineIsNotRunning:                                "EngineIsNotRunning",
+	EngineRunTimeTooLow:                               "EngineRunTimeTooLow",
+	TemperatureTooHigh:                                "TemperatureTooHigh",
+	TemperatureTooLow:                                 "TemperatureTooLow",
+	VehicleSpeedTooHigh:                               "VehicleSpeedTooHigh",
+	VehicleSpeedTooLow:                                "VehicleSpeedTooLow",
+	ThrottlePedalTooHigh:                              "ThrottlePedalTooHigh",
+	ThrottlePedalTooLow:                               "ThrottlePedalTooLow",
+	TransmissionRangeNotInNeutral:                     "TransmissionRangeNotInNeutral",
+	TransmissionRangeNotInGear:                        "TransmissionRangeNotInGear",
+	BrakeSwitchNotClosed:                              "BrakeSwitchNotClosed",
+	ShifterLeverNotInPark:                             "ShifterLeverNotInPark",
+	TorqueConverterClutchLocked:                       "TorqueConverterClutchLocked",
+	VoltageTooHigh:                                    "VoltageTooHigh",
+	VoltageTooLow:                                     "VoltageTooLow",
+	ResourceTemporarilyNotAvailable:                   "ResourceTemporarilyNotAvailable",
+	TerminationWithSignatureRequested:                 "TerminationWithSignatureRequested",
+	AccessDenied:                                      "AccessDenied",
+	VersionNotSupported:                               "VersionNotSupported",
+	SecuredLinkNotSupported:                           "SecuredLinkNotSupported",
+	CertificateNotAvailable:                           "CertificateNotAvailable",
+	AuditTrailInformationNotAvailable:                 "AuditTrailInformationNotAvailable",
 }
 
 // getNRCDescription 获取 NRC 错误描述
@@ -140,7 +227,7 @@ func getNRCDescription(nrc byte) string {
 // UDSClient 是一个高级客户端，封装了所有初始化和通信的复杂性
 type UDSClient struct {
 	stack    Transport // 使用接口而非具体结构体
-	adapter  *driver.ToomossAdapter
+	adapter  *driver.Adapter
 	cancel   context.CancelFunc // 用于控制所有后台goroutine的生命周期
 	ctx      context.Context    // 客户端生命周期 context
 	reqMu    sync.Mutex
@@ -152,7 +239,7 @@ type UDSClient struct {
 // 它接收一个CAN驱动实例和ISOTP配置。
 func NewUDSClient(dev driver.CANDriver, addr *isotp.Address, cfg isotp.Config) (*UDSClient, error) {
 	// 1. 初始化适配器并启动硬件驱动
-	adapter, err := driver.NewToomossAdapter(dev)
+	adapter, err := driver.NewAdapter(dev)
 	if err != nil {
 		return nil, fmt.Errorf("无法创建Toomoss适配器: %w", err)
 	}
@@ -164,7 +251,7 @@ func NewUDSClient(dev driver.CANDriver, addr *isotp.Address, cfg isotp.Config) (
 }
 
 // newUDSClient 内部构造函数，支持依赖注入
-func newUDSClient(adapter *driver.ToomossAdapter, stack Transport) *UDSClient {
+func newUDSClient(adapter *driver.Adapter, stack Transport) *UDSClient {
 	// 3. 创建用于goroutine生命周期管理的context
 	ctx, cancel := context.WithCancel(context.Background())
 
@@ -408,7 +495,7 @@ func (c *UDSClient) singleRequest(ctx context.Context, payload []byte, timeout t
 					serviceSID := data[1]
 
 					// Response Pending - 重置超时继续等待
-					if nrc == NRCResponsePending {
+					if nrc == RequestCorrectlyReceived_ResponsePending {
 						if !deadline.Stop() {
 							select {
 							case <-deadline.C:

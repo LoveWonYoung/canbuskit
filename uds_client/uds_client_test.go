@@ -147,7 +147,7 @@ func (t *MockTransport) PushResponse(data []byte) {
 func TestUDSError_Error(t *testing.T) {
 	err := &UDSError{
 		ServiceID: 0x22,
-		NRC:       NRCServiceNotSupported,
+		NRC:       ServiceNotSupported,
 		Message:   "服务不支持",
 	}
 
@@ -163,11 +163,11 @@ func TestUDSError_IsRetryable(t *testing.T) {
 		nrc       byte
 		retryable bool
 	}{
-		{NRCBusyRepeatRequest, true},
-		{NRCResponsePending, true},
-		{NRCServiceNotSupported, false},
-		{NRCSecurityAccessDenied, false},
-		{NRCConditionsNotCorrect, false},
+		{BusyRepeatRequest, true},
+		{RequestCorrectlyReceived_ResponsePending, true},
+		{ServiceNotSupported, false},
+		{SecurityAccessDenied, false},
+		{ConditionsNotCorrect, false},
 	}
 
 	for _, tc := range tests {
@@ -200,9 +200,9 @@ func TestGetNRCDescription(t *testing.T) {
 		nrc      byte
 		expected string
 	}{
-		{NRCGeneralReject, "一般拒绝"},
-		{NRCServiceNotSupported, "服务不支持"},
-		{NRCResponsePending, "响应挂起"},
+		{GeneralReject, "GeneralReject"},
+		{ServiceNotSupported, "ServiceNotSupported"},
+		{RequestCorrectlyReceived_ResponsePending, "RequestCorrectlyReceived_ResponsePending"},
 		{0xFF, "未知错误"}, // 未知 NRC
 	}
 
@@ -246,15 +246,15 @@ func TestNRCConstants(t *testing.T) {
 		constant byte
 		expected byte
 	}{
-		{"GeneralReject", NRCGeneralReject, 0x10},
-		{"ServiceNotSupported", NRCServiceNotSupported, 0x11},
-		{"SubFunctionNotSupported", NRCSubFunctionNotSupported, 0x12},
-		{"IncorrectMessageLength", NRCIncorrectMessageLength, 0x13},
-		{"BusyRepeatRequest", NRCBusyRepeatRequest, 0x21},
-		{"ConditionsNotCorrect", NRCConditionsNotCorrect, 0x22},
-		{"RequestOutOfRange", NRCRequestOutOfRange, 0x31},
-		{"SecurityAccessDenied", NRCSecurityAccessDenied, 0x33},
-		{"ResponsePending", NRCResponsePending, 0x78},
+		{"GeneralReject", GeneralReject, 0x10},
+		{"ServiceNotSupported", ServiceNotSupported, 0x11},
+		{"SubFunctionNotSupported", SubFunctionNotSupported, 0x12},
+		{"IncorrectMessageLength", IncorrectMessageLengthOrInvalidFormat, 0x13},
+		{"BusyRepeatRequest", BusyRepeatRequest, 0x21},
+		{"ConditionsNotCorrect", ConditionsNotCorrect, 0x22},
+		{"RequestOutOfRange", RequestOutOfRange, 0x31},
+		{"SecurityAccessDenied", SecurityAccessDenied, 0x33},
+		{"ResponsePending", RequestCorrectlyReceived_ResponsePending, 0x78},
 	}
 
 	for _, tc := range tests {
@@ -290,7 +290,7 @@ func TestRequestOptions_Validation(t *testing.T) {
 func TestUDSError_TypeAssertion(t *testing.T) {
 	var err error = &UDSError{
 		ServiceID: 0x10,
-		NRC:       NRCConditionsNotCorrect,
+		NRC:       ConditionsNotCorrect,
 		Message:   "条件不满足",
 	}
 
@@ -303,7 +303,7 @@ func TestUDSError_TypeAssertion(t *testing.T) {
 	if udsErr.ServiceID != 0x10 {
 		t.Error("ServiceID 不匹配")
 	}
-	if udsErr.NRC != NRCConditionsNotCorrect {
+	if udsErr.NRC != ConditionsNotCorrect {
 		t.Error("NRC 不匹配")
 	}
 }
@@ -313,7 +313,7 @@ func TestSetAddressingMode(t *testing.T) {
 	mockTransport := NewMockTransport()
 	// 注意：这里我们需要手动构造 UDSClient，因为 newUDSClient 是未导出的 (或者我们可以导出一个 NewOption?)
 	// 但由于我们在同一个包内测试 (package uds_client)，我们可以直接调用 internal 构造函数 newUDSClient
-	// 不过 newUDSClient 需要 *driver.ToomossAdapter，这很难 mock。
+	// 不过 newUDSClient 需要 *driver.Adapter，这很难 mock。
 	// 为了测试方便，我们可能需要重构 newUDSClient 使得它接受 adapter 接口，或者我们手动构造 Client。
 
 	// 手动构造 client 以便注入 mockTransport
@@ -400,7 +400,7 @@ func TestRequestWithContext_ReturnsResponseOnNRC(t *testing.T) {
 	// 模拟异步到达：推入负响应（小延时，避免被 pre-clear 清掉）
 	go func() {
 		time.Sleep(1 * time.Millisecond)
-		mockTransport.PushResponse([]byte{0x7F, 0x22, NRCServiceNotSupported})
+		mockTransport.PushResponse([]byte{0x7F, 0x22, ServiceNotSupported})
 	}()
 
 	resp, err := client.RequestWithContext(context.Background(), []byte{0x22, 0xF1, 0x90}, DefaultRequestOptions())
@@ -410,14 +410,14 @@ func TestRequestWithContext_ReturnsResponseOnNRC(t *testing.T) {
 	if resp == nil {
 		t.Fatalf("期望返回原始响应帧，但为 nil")
 	}
-	if !(len(resp) >= 3 && resp[0] == 0x7F && resp[2] == NRCServiceNotSupported) {
+	if !(len(resp) >= 3 && resp[0] == 0x7F && resp[2] == ServiceNotSupported) {
 		t.Fatalf("原始响应帧不匹配: %v", resp)
 	}
 	var udsErr *UDSError
 	if !errors.As(err, &udsErr) {
 		t.Fatalf("期望 err 为 *UDSError, 实际: %T", err)
 	}
-	if udsErr.NRC != NRCServiceNotSupported {
+	if udsErr.NRC != ServiceNotSupported {
 		t.Fatalf("UDSError 的 NRC 不匹配")
 	}
 }
@@ -425,28 +425,28 @@ func TestRequestWithContext_ReturnsResponseOnNRC(t *testing.T) {
 // TestAllNRCDescriptions 测试所有 NRC 都有描述
 func TestAllNRCDescriptions(t *testing.T) {
 	allNRCs := []byte{
-		NRCGeneralReject,
-		NRCServiceNotSupported,
-		NRCSubFunctionNotSupported,
-		NRCIncorrectMessageLength,
-		NRCResponseTooLong,
-		NRCBusyRepeatRequest,
-		NRCConditionsNotCorrect,
-		NRCRequestSequenceError,
-		NRCNoResponseFromSubnetComponent,
-		NRCFailurePreventsExecution,
-		NRCRequestOutOfRange,
-		NRCSecurityAccessDenied,
-		NRCInvalidKey,
-		NRCExceedNumberOfAttempts,
-		NRCRequiredTimeDelayNotExpired,
-		NRCUploadDownloadNotAccepted,
-		NRCTransferDataSuspended,
-		NRCGeneralProgrammingFailure,
-		NRCWrongBlockSequenceCounter,
-		NRCResponsePending,
-		NRCSubFunctionNotSupportedInActiveSession,
-		NRCServiceNotSupportedInActiveSession,
+		GeneralReject,
+		ServiceNotSupported,
+		SubFunctionNotSupported,
+		IncorrectMessageLengthOrInvalidFormat,
+		ResponseTooLong,
+		BusyRepeatRequest,
+		ConditionsNotCorrect,
+		RequestSequenceError,
+		NoResponseFromSubnetComponent,
+		FailurePreventsExecutionOfRequestedAction,
+		RequestOutOfRange,
+		SecurityAccessDenied,
+		InvalidKey,
+		ExceedNumberOfAttempts,
+		RequiredTimeDelayNotExpired,
+		UploadDownloadNotAccepted,
+		TransferDataSuspended,
+		GeneralProgrammingFailure,
+		WrongBlockSequenceCounter,
+		RequestCorrectlyReceived_ResponsePending,
+		SubFunctionNotSupportedInActiveSession,
+		ServiceNotSupportedInActiveSession,
 	}
 
 	for _, nrc := range allNRCs {
@@ -463,14 +463,14 @@ func TestAllNRCDescriptions(t *testing.T) {
 
 func BenchmarkGetNRCDescription(b *testing.B) {
 	for i := 0; i < b.N; i++ {
-		_ = getNRCDescription(NRCResponsePending)
+		_ = getNRCDescription(RequestCorrectlyReceived_ResponsePending)
 	}
 }
 
 func BenchmarkUDSError_Error(b *testing.B) {
 	err := &UDSError{
 		ServiceID: 0x22,
-		NRC:       NRCServiceNotSupported,
+		NRC:       ServiceNotSupported,
 		Message:   "服务不支持",
 	}
 	b.ResetTimer()

@@ -8,14 +8,14 @@ import (
 	"github.com/LoveWonYoung/canbuskit/tp_layer"
 )
 
-// ToomossAdapter 是连接 go-uds 和 Toomoss 硬件的适配器
-type ToomossAdapter struct {
+// Adapter 是连接 udsclient 和 can device 硬件的适配器
+type Adapter struct {
 	driver CANDriver
 	rxChan <-chan UnifiedCANMessage
 }
 
-// NewToomossAdapter 是适配器的构造函数
-func NewToomossAdapter(dev CANDriver) (*ToomossAdapter, error) {
+// NewAdapter 是适配器的构造函数
+func NewAdapter(dev CANDriver) (*Adapter, error) {
 	if dev == nil {
 		return nil, errors.New("CAN driver instance cannot be nil")
 	}
@@ -24,7 +24,7 @@ func NewToomossAdapter(dev CANDriver) (*ToomossAdapter, error) {
 	}
 	dev.Start()
 
-	adapter := &ToomossAdapter{
+	adapter := &Adapter{
 		driver: dev,
 		rxChan: dev.RxChan(),
 	}
@@ -34,21 +34,21 @@ func NewToomossAdapter(dev CANDriver) (*ToomossAdapter, error) {
 }
 
 // Close 用于停止驱动并释放资源
-func (t *ToomossAdapter) Close() {
+func (t *Adapter) Close() {
 	log.Println("Closing Toomoss-Adapter...")
 	t.driver.Stop()
 }
 
 // TxFunc 是发送函数
-func (t *ToomossAdapter) TxFunc(msg tp_layer.CanMessage) {
+func (t *Adapter) TxFunc(msg tp_layer.CanMessage) {
 	err := t.driver.Write(int32(msg.ArbitrationID), msg.Data)
 	if err != nil {
-		log.Printf("ERROR: ToomossAdapter failed to send message: %v", err)
+		log.Printf("ERROR: Adapter failed to send message: %v", err)
 	}
 }
 
 // RxFunc 是接收函数
-func (t *ToomossAdapter) RxFunc() (tp_layer.CanMessage, bool) {
+func (t *Adapter) RxFunc() (tp_layer.CanMessage, bool) {
 	select {
 	case receivedMsg, ok := <-t.rxChan:
 		if !ok {
@@ -62,7 +62,7 @@ func (t *ToomossAdapter) RxFunc() (tp_layer.CanMessage, bool) {
 
 		isotpMsg := tp_layer.CanMessage{
 			ArbitrationID: receivedMsg.ID,
-			Data: receivedMsg.Data[:payloadLength],
+			Data:          receivedMsg.Data[:payloadLength],
 			IsExtendedID:  false,
 			IsFD:          receivedMsg.IsFD,
 			BitrateSwitch: false,
