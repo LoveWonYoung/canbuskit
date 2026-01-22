@@ -552,7 +552,6 @@ func (c *CanMix) Init() error {
 func (c *CanMix) Start() {
 	log.Println("CAN-FD驱动的中央读取服务已启动...")
 	c.drainInitialBuffer()
-	log.Println("--------------------------------------------------------Clear Cache-----------------------------------------------------")
 	go c.readLoop()
 }
 
@@ -665,7 +664,11 @@ func (c *CanMix) Write(id int32, data []byte) error {
 	)
 
 	if int(sendRet) == len(canFDMsg) {
-		logCANMessage("TX", uint32(id), dataLenToDlc(len(data)), canFDMsg[0].Data[:canFDMsg[0].DLC], c.canType)
+	    tempTmsDlc:=8
+	    if tmsDlc:= dataLenToDlc(len(data));tmsDlc>=8{
+	        tempTmsDlc = tmsDlc
+	    }
+		logCANMessage("TX", uint32(id), tempTmsDlc, canFDMsg[0].Data[:canFDMsg[0].DLC], c.canType)
 	} else {
 		log.Printf("错误: CAN/CANFD消息发送失败, ID=0x%03X", id)
 		return errors.New("CAN/CANFD消息发送失败")

@@ -63,11 +63,9 @@ func logCANMessage(direction string, id uint32, dlc byte, data []byte, canType C
 	}
 	format := "%s %s: ID=0x%03X, DLC=%02d, Data=% 02X"
 	log.Printf(format, direction, typeStr, id, dlc, data)
-	// fmt.Printf(format+"\n", direction, typeStr, id, dlc, data)
 }
 
-// UnifiedCANMessage 是一个通用的CAN/CAN-FD消息结构体，用于在channel中传递。
-// 它屏蔽了底层 CAN_MSG 和 CANFD_MSG 的差异。
+// UnifiedCANMessage 是一个通用的CAN/CAN-FD消息结构体，用于在channel中传递,它屏蔽了底层 CAN_MSG 和 CANFD_MSG 的差异。
 type UnifiedCANMessage struct {
 	ID   uint32
 	DLC  byte
