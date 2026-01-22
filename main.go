@@ -12,8 +12,7 @@ import (
 
 func main() {
 	fmt.Println("GOARCH =", runtime.GOARCH)
-	var drv driver.CANDriver = driver.NewTSMaster(driver.CANFD)
-	// var drv driver.CANDriver = driver.NewCanMix(driver.CANFD)
+	var drv driver.CANDriver = driver.NewAutoDriver(driver.CANFD)
 	if err := drv.Init(); err != nil {
 		fmt.Printf("Init failed: %v\n", err)
 		return

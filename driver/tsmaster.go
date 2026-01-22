@@ -4,6 +4,7 @@ package driver
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"log"
 	"math"
@@ -238,13 +239,29 @@ func (t *TSMaster) Init() error {
 	t.ctx, t.cancel = context.WithCancel(context.Background())
 
 	// 初始化接收通道
-	t.rxChan = make(chan UnifiedCANMessage, 1000)
+	t.rxChan = make(chan UnifiedCANMessage, RxChannelBufferSize)
+
+	cleanup := func(err error) error {
+		if t.cancel != nil {
+			t.cancel()
+		}
+		if t.loader != nil {
+			t.loader.Close()
+			t.loader = nil
+		}
+		if t.rxChan != nil {
+			close(t.rxChan)
+			t.rxChan = nil
+		}
+		t.isConnected = false
+		return err
+	}
 
 	// 创建TSMaster加载器
 	var err error
 	t.loader, err = NewTSMasterLoader()
 	if err != nil {
-		return fmt.Errorf("failed to load TSMaster DLL: %v", err)
+		return cleanup(fmt.Errorf("failed to load TSMaster DLL: %w", err))
 	}
 
 	fmt.Printf("✅ Successfully loaded TSMaster DLL\n")
@@ -255,11 +272,20 @@ func (t *TSMaster) Init() error {
 	appName, _ := syscall.UTF16PtrFromString("TSMaster_Go_Demo")
 	r, _, _ := initialize_lib_tsmaster.Call(uintptr(unsafe.Pointer(appName)))
 	fmt.Printf("Initialization result: %d\n", r)
+	if r != 0 {
+		return cleanup(fmt.Errorf("initialize_lib_tsmaster failed: %d", r))
+	}
 
 	// 枚举硬件设备
 	var findDevice int32 = 0
 	r, _, _ = t.loader.GetProcAddress("tsapp_enumerate_hw_devices").Call(uintptr(unsafe.Pointer(&findDevice)))
 	fmt.Printf("Found devices: %d\n", findDevice)
+	if r != 0 {
+		return cleanup(fmt.Errorf("tsapp_enumerate_hw_devices failed: %d", r))
+	}
+	if findDevice <= 0 {
+		return cleanup(errors.New("no TSMaster devices found"))
+	}
 
 	// 设置CAN通道数量
 	r, _, _ = t.loader.GetProcAddress("tsapp_set_can_channel_count").Call(uintptr(1))
@@ -293,9 +319,10 @@ func (t *TSMaster) Init() error {
 	// 连接设备
 	r, _, _ = t.loader.GetProcAddress("tsapp_connect").Call()
 	fmt.Printf("Connect result: %d\n", r)
-	if r == 0 {
-		t.isConnected = true
+	if r != 0 {
+		return cleanup(fmt.Errorf("tsapp_connect failed: %d", r))
 	}
+	t.isConnected = true
 
 	// 启用接收FIFO
 	r, _, _ = t.loader.GetProcAddress("tsfifo_enable_receive_fifo").Call()

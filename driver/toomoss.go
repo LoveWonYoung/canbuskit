@@ -467,16 +467,16 @@ const (
 	CANFD_MSG_FLAG_FDF = 0x04 // CANFD帧标志
 )
 
-type CanMix struct {
+type Toomoss struct {
 	rxChan  chan UnifiedCANMessage
 	ctx     context.Context
 	cancel  context.CancelFunc
 	canType CanType
 }
 
-func NewCanMix(canType CanType) *CanMix {
+func NewToomoss(canType CanType) *Toomoss {
 	ctx, cancel := context.WithCancel(context.Background())
-	return &CanMix{
+	return &Toomoss{
 		rxChan:  make(chan UnifiedCANMessage, RxChannelBufferSize),
 		ctx:     ctx,
 		cancel:  cancel,
@@ -484,7 +484,7 @@ func NewCanMix(canType CanType) *CanMix {
 	}
 }
 
-func (c *CanMix) Init() error {
+func (c *Toomoss) Init() error {
 	if err := ensureToomossLoaded(); err != nil {
 		return fmt.Errorf("failed to load Toomoss DLLs: %w", err)
 	}
@@ -549,13 +549,13 @@ func (c *CanMix) Init() error {
 	return nil
 }
 
-func (c *CanMix) Start() {
+func (c *Toomoss) Start() {
 	log.Println("CAN-FD驱动的中央读取服务已启动...")
 	c.drainInitialBuffer()
 	go c.readLoop()
 }
 
-func (c *CanMix) Stop() {
+func (c *Toomoss) Stop() {
 	log.Println("正在停止CAN-FD驱动的读取服务...")
 	c.cancel()
 	if err := usbClose(); err != nil {
@@ -563,7 +563,7 @@ func (c *CanMix) Stop() {
 	}
 }
 
-func (c *CanMix) readLoop() {
+func (c *Toomoss) readLoop() {
 	ticker := time.NewTicker(PollingInterval)
 	defer ticker.Stop()
 	var canFDMsg [MsgBufferSize]CANFD_MSG
@@ -612,7 +612,7 @@ func (c *CanMix) readLoop() {
 	}
 }
 
-func (c *CanMix) drainInitialBuffer() {
+func (c *Toomoss) drainInitialBuffer() {
 	var canFDMsg [MsgBufferSize]CANFD_MSG
 	for {
 		n, _, _ := syscall.SyscallN(
@@ -628,7 +628,7 @@ func (c *CanMix) drainInitialBuffer() {
 	}
 }
 
-func (c *CanMix) Write(id int32, data []byte) error {
+func (c *Toomoss) Write(id int32, data []byte) error {
 	if len(data) == 0 {
 		return fmt.Errorf("数据长度 %d ", len(data))
 	} else if len(data) > 64 && c.canType == CANFD {
@@ -676,6 +676,6 @@ func (c *CanMix) Write(id int32, data []byte) error {
 	return nil
 }
 
-func (c *CanMix) RxChan() <-chan UnifiedCANMessage { return c.rxChan }
+func (c *Toomoss) RxChan() <-chan UnifiedCANMessage { return c.rxChan }
 
-func (c *CanMix) Context() context.Context { return c.ctx }
+func (c *Toomoss) Context() context.Context { return c.ctx }
