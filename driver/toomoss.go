@@ -664,10 +664,10 @@ func (c *CanMix) Write(id int32, data []byte) error {
 	)
 
 	if int(sendRet) == len(canFDMsg) {
-	    tempTmsDlc:=8
-	    if tmsDlc:= dataLenToDlc(len(data));tmsDlc>=8{
-	        tempTmsDlc = tmsDlc
-	    }
+		var tempTmsDlc byte = 8
+		if tmsDlc := dataLenToDlc(len(data)); tmsDlc >= 8 {
+			tempTmsDlc = tmsDlc
+		}
 		logCANMessage("TX", uint32(id), tempTmsDlc, canFDMsg[0].Data[:canFDMsg[0].DLC], c.canType)
 	} else {
 		log.Printf("错误: CAN/CANFD消息发送失败, ID=0x%03X", id)
