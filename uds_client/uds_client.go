@@ -402,7 +402,8 @@ func (c *UDSClient) RequestWithContext(ctx context.Context, payload []byte, opts
 	}
 
 	requestSID := payload[0]
-	expectedResponseSID := requestSID + 0x40 // 正响应 SID = 请求 SID + 0x40
+	expectedResponseSID := requestSID + 0x40                        // 正响应 SID = 请求 SID + 0x40
+	suppressPositive := len(payload) >= 2 && (payload[1]&0x80) != 0 // bit7=1 表示抑制正响应
 
 	var lastErr error
 	var lastResp []byte
@@ -412,7 +413,7 @@ func (c *UDSClient) RequestWithContext(ctx context.Context, payload []byte, opts
 			time.Sleep(opts.RetryDelay)
 		}
 
-		response, err := c.singleRequest(ctx, payload, opts.Timeout)
+		response, err := c.singleRequest(ctx, payload, opts.Timeout, suppressPositive)
 		if err != nil {
 			// 检查是否是 context 取消
 			if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
@@ -460,7 +461,7 @@ func (c *UDSClient) RequestWithContext(ctx context.Context, payload []byte, opts
 }
 
 // singleRequest 执行单次请求（不含重试逻辑）
-func (c *UDSClient) singleRequest(ctx context.Context, payload []byte, timeout time.Duration) ([]byte, error) {
+func (c *UDSClient) singleRequest(ctx context.Context, payload []byte, timeout time.Duration, suppressPositive bool) ([]byte, error) {
 	// 发送前清空可能存在的旧响应
 	for {
 		if _, ok := c.stack.Recv(); !ok {
@@ -486,6 +487,9 @@ func (c *UDSClient) singleRequest(ctx context.Context, payload []byte, timeout t
 		case <-clientDone:
 			return nil, errors.New("UDS 客户端已关闭")
 		case <-deadline.C:
+			if suppressPositive {
+				return nil, nil // 抑制正响应：超时视为成功完成
+			}
 			return nil, fmt.Errorf("等待响应超时 (%v)", timeout)
 		default:
 			if data, ok := c.stack.Recv(); ok {
