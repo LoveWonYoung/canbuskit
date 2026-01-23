@@ -503,8 +503,8 @@ func (c *UDSClient) singleRequest(ctx context.Context, payload []byte, timeout t
 							}
 						}
 						deadline.Reset(responsePendingTimeout)
-						log.Printf("收到 Response Pending (SID=%02X)，继续等待...", serviceSID)
-						fmt.Printf("Response Pending (SID=%02X Resp=% 02X) ，继续等待...\n", serviceSID, data)
+						// log.Printf("收到 Response Pending (SID=%02X)，继续等待...", serviceSID)
+						// fmt.Printf("Response Pending (SID=%02X Resp=% 02X) ，继续等待...\n", serviceSID, data)
 						continue
 					}
 

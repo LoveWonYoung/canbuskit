@@ -99,23 +99,25 @@ func loadDLLs() error {
 		return nil
 	}
 
-	if registryPath := getRegistryPath(); registryPath != "" {
-		fmt.Println("Found registry path:", registryPath)
-		libusbPath := filepath.Join(registryPath, "libusb-1.0.dll")
-		if _, err := syscall.LoadLibrary(libusbPath); err != nil {
-			fmt.Println("Warning: Failed to load libusb-1.0.dll from", libusbPath, "Error:", err)
-		}
+	if runtime.GOARCH == "386" {
+		if registryPath := getRegistryPath(); registryPath != "" {
+			fmt.Println("Found registry path:", registryPath)
+			libusbPath := filepath.Join(registryPath, "libusb-1.0.dll")
+			if _, err := syscall.LoadLibrary(libusbPath); err != nil {
+				fmt.Println("Warning: Failed to load libusb-1.0.dll from", libusbPath, "Error:", err)
+			}
 
-		usbPath := filepath.Join(registryPath, "USB2XXX.dll")
-		if handle, err := syscall.LoadLibrary(usbPath); err == nil {
-			UsbDeviceDLL = handle
-			fmt.Println("Loaded DLLs from registry path:", registryPath)
-			return nil
+			usbPath := filepath.Join(registryPath, "USB2XXX.dll")
+			if handle, err := syscall.LoadLibrary(usbPath); err == nil {
+				UsbDeviceDLL = handle
+				fmt.Println("Loaded DLLs from registry path:", registryPath)
+				return nil
+			} else {
+				fmt.Println("Failed to load USB2XXX.dll from", usbPath, "Error:", err)
+			}
 		} else {
-			fmt.Println("Failed to load USB2XXX.dll from", usbPath, "Error:", err)
+			fmt.Println("Registry path not found")
 		}
-	} else {
-		fmt.Println("Registry path not found")
 	}
 
 	dllDir := archDLLDir()
