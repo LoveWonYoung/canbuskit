@@ -29,24 +29,22 @@ func (a *AutoDriver) Init() error {
 	if a.driver != nil {
 		return nil
 	}
-
-	tsm := NewTSMaster(a.canType)
-	if err := tsm.Init(); err == nil {
-		a.driver = tsm
-		log.Println("Auto driver selected: TSMaster")
+	toomoss := NewToomoss(a.canType)
+	if err := toomoss.Init(); err == nil {
+		a.driver = toomoss
+		log.Println("Auto driver selected: Toomoss")
 		return nil
 	} else {
-		tsmErr := err
-		log.Printf("Auto driver: TSMaster init failed: %v", tsmErr)
-
-		toomoss := NewToomoss(a.canType)
-		if err := toomoss.Init(); err == nil {
-			a.driver = toomoss
-			log.Println("Auto driver selected: Toomoss")
+		mixErr := err
+		log.Printf("Auto driver: Toomoss init failed: %v", mixErr)
+		tsm := NewTSMaster(a.canType)
+		if err := tsm.Init(); err == nil {
+			a.driver = tsm
+			log.Println("Auto driver selected: TSMaster")
 			return nil
 		} else {
-			mixErr := err
-			log.Printf("Auto driver: Toomoss init failed: %v", mixErr)
+			tsmErr := err
+			log.Printf("Auto driver: TSMaster init failed: %v", tsmErr)
 			return fmt.Errorf("no available CAN device (tsmaster: %v; toomoss: %v)", tsmErr, mixErr)
 		}
 	}
