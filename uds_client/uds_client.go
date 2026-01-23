@@ -137,6 +137,17 @@ const (
 	AddressFunctional
 )
 
+// hasSubFunctionSuppressPositive 判断该服务是否有首字节子功能，且允许使用 bit7 抑制正响应
+// 按标准常见服务列举，避免误将 DID/参数高字节当作子功能
+func hasSubFunctionSuppressPositive(sid byte) bool {
+	switch sid {
+	case 0x10, 0x11, 0x19, 0x27, 0x28, 0x2F, 0x31, 0x3E, 0x85, 0x86, 0x87:
+		return true
+	default:
+		return false
+	}
+}
+
 // DefaultRequestOptions 返回默认请求选项
 func DefaultRequestOptions() RequestOptions {
 	return RequestOptions{
@@ -402,8 +413,8 @@ func (c *UDSClient) RequestWithContext(ctx context.Context, payload []byte, opts
 	}
 
 	requestSID := payload[0]
-	expectedResponseSID := requestSID + 0x40                        // 正响应 SID = 请求 SID + 0x40
-	suppressPositive := len(payload) >= 2 && (payload[1]&0x80) != 0 // bit7=1 表示抑制正响应
+	expectedResponseSID := requestSID + 0x40                                                                      // 正响应 SID = 请求 SID + 0x40
+	suppressPositive := hasSubFunctionSuppressPositive(requestSID) && len(payload) >= 2 && (payload[1]&0x80) != 0 // 仅对子功能服务识别 bit7
 
 	var lastErr error
 	var lastResp []byte
