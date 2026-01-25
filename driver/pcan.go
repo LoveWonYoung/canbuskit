@@ -8,6 +8,8 @@ import (
 	"errors"
 	"fmt"
 	"log"
+	"path/filepath"
+	"strings"
 	"syscall"
 	"time"
 	"unsafe"
@@ -216,20 +218,29 @@ func (p *PCAN) initFD() error {
 }
 
 func (p *PCAN) loadDLL() error {
-	dll := syscall.NewLazyDLL(pcanDLLName)
-	if err := dll.Load(); err != nil {
-		return fmt.Errorf("failed to load %s: %w", pcanDLLName, err)
+	candidates := []string{
+		filepath.Join(".", "DLLs", archDLLDir(), pcanDLLName),
+		pcanDLLName,
 	}
-	p.dll = dll
-	p.initProc = dll.NewProc("CAN_Initialize")
-	p.initFDProc = dll.NewProc("CAN_InitializeFD")
-	p.uninitProc = dll.NewProc("CAN_Uninitialize")
-	p.readProc = dll.NewProc("CAN_Read")
-	p.readFDProc = dll.NewProc("CAN_ReadFD")
-	p.writeProc = dll.NewProc("CAN_Write")
-	p.writeFDProc = dll.NewProc("CAN_WriteFD")
-	p.getErrorTextProc = dll.NewProc("CAN_GetErrorText")
-	return nil
+	var errs []string
+	for _, dllPath := range candidates {
+		dll := syscall.NewLazyDLL(dllPath)
+		if err := dll.Load(); err != nil {
+			errs = append(errs, fmt.Sprintf("%s: %v", dllPath, err))
+			continue
+		}
+		p.dll = dll
+		p.initProc = dll.NewProc("CAN_Initialize")
+		p.initFDProc = dll.NewProc("CAN_InitializeFD")
+		p.uninitProc = dll.NewProc("CAN_Uninitialize")
+		p.readProc = dll.NewProc("CAN_Read")
+		p.readFDProc = dll.NewProc("CAN_ReadFD")
+		p.writeProc = dll.NewProc("CAN_Write")
+		p.writeFDProc = dll.NewProc("CAN_WriteFD")
+		p.getErrorTextProc = dll.NewProc("CAN_GetErrorText")
+		return nil
+	}
+	return fmt.Errorf("failed to load %s (%s)", pcanDLLName, strings.Join(errs, "; "))
 }
 
 func (p *PCAN) drainInitialBuffer() {
