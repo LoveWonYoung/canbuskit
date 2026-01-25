@@ -7,11 +7,12 @@ import (
 	"errors"
 	"fmt"
 	"log"
+	"strings"
 	"sync"
 )
 
 // AutoDriver selects the first available CAN device driver.
-// Order: TSMaster -> Toomoss.
+// Order: Toomoss -> TSMaster -> PCAN -> Vector.
 type AutoDriver struct {
 	canType CanType
 	mu      sync.Mutex
@@ -29,25 +30,29 @@ func (a *AutoDriver) Init() error {
 	if a.driver != nil {
 		return nil
 	}
-	toomoss := NewToomoss(a.canType)
-	if err := toomoss.Init(); err == nil {
-		a.driver = toomoss
-		log.Println("Auto driver selected: Toomoss")
-		return nil
-	} else {
-		mixErr := err
-		log.Printf("Auto driver: Toomoss init failed: %v", mixErr)
-		tsm := NewTSMaster(a.canType)
-		if err := tsm.Init(); err == nil {
-			a.driver = tsm
-			log.Println("Auto driver selected: TSMaster")
+	candidates := []struct {
+		name   string
+		driver CANDriver
+	}{
+		{name: "Toomoss", driver: NewToomoss(a.canType)},
+		{name: "TSMaster", driver: NewTSMaster(a.canType)},
+		{name: "PCAN", driver: NewPCAN(a.canType)},
+		{name: "Vector", driver: NewVector(a.canType)},
+	}
+
+	var errs []string
+	for _, candidate := range candidates {
+		if err := candidate.driver.Init(); err == nil {
+			a.driver = candidate.driver
+			log.Printf("Auto driver selected: %s", candidate.name)
 			return nil
 		} else {
-			tsmErr := err
-			log.Printf("Auto driver: TSMaster init failed: %v", tsmErr)
-			return fmt.Errorf("no available CAN device (tsmaster: %v; toomoss: %v)", tsmErr, mixErr)
+			log.Printf("Auto driver: %s init failed: %v", candidate.name, err)
+			errs = append(errs, fmt.Sprintf("%s: %v", strings.ToLower(candidate.name), err))
 		}
 	}
+
+	return fmt.Errorf("no available CAN device (%s)", strings.Join(errs, "; "))
 }
 
 func (a *AutoDriver) Start() {
