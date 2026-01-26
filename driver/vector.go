@@ -596,7 +596,19 @@ func (v *Vector) errorString(status int16) string {
 	if ptr == 0 {
 		return fmt.Sprintf("status=%d", status)
 	}
-	return syscall.BytePtrToString((*byte)(unsafe.Pointer(ptr)))
+	return bytePtrToString((*byte)(unsafe.Pointer(ptr)))
+}
+
+func bytePtrToString(p *byte) string {
+	if p == nil {
+		return ""
+	}
+	buf := make([]byte, 0, 64)
+	for *p != 0 {
+		buf = append(buf, *p)
+		p = (*byte)(unsafe.Pointer(uintptr(unsafe.Pointer(p)) + 1))
+	}
+	return string(buf)
 }
 
 func (v *Vector) cleanup(err error) error {
