@@ -8,7 +8,9 @@ import (
 	"errors"
 	"fmt"
 	"log"
+	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"syscall"
 	"time"
@@ -217,11 +219,67 @@ func (p *PCAN) initFD() error {
 	return nil
 }
 
-func (p *PCAN) loadDLL() error {
-	candidates := []string{
-		filepath.Join(".", "DLLs", archDLLDir(), pcanDLLName),
-		pcanDLLName,
+func pcanDLLCandidates() []string {
+	var candidates []string
+	seen := make(map[string]struct{})
+
+	add := func(path string) {
+		if path == "" {
+			return
+		}
+		if _, exists := seen[path]; exists {
+			return
+		}
+		seen[path] = struct{}{}
+		candidates = append(candidates, path)
 	}
+
+	if envPath := os.Getenv("PCAN_DLL_PATH"); envPath != "" {
+		if info, err := os.Stat(envPath); err == nil && info.IsDir() {
+			add(filepath.Join(envPath, pcanDLLName))
+		} else {
+			add(envPath)
+		}
+	}
+	if envDir := os.Getenv("PCAN_DLL_DIR"); envDir != "" {
+		add(filepath.Join(envDir, pcanDLLName))
+	}
+
+	add(filepath.Join(".", "DLLs", archDLLDir(), pcanDLLName))
+	add(pcanDLLName)
+
+	programRoots := []string{
+		os.Getenv("ProgramFiles"),
+		os.Getenv("ProgramFiles(x86)"),
+	}
+	archSubdirs := []string{"Win64", "x64"}
+	if runtime.GOARCH == "386" {
+		archSubdirs = []string{"Win32", "x86"}
+	}
+	baseSubdirs := []string{"", "Redistributable", "Redistributables"}
+
+	for _, root := range programRoots {
+		if root == "" {
+			continue
+		}
+		base := filepath.Join(root, "PEAK-System", "PCAN-Basic")
+		for _, sub := range baseSubdirs {
+			dir := base
+			if sub != "" {
+				dir = filepath.Join(base, sub)
+			}
+			add(filepath.Join(dir, pcanDLLName))
+			for _, archSub := range archSubdirs {
+				add(filepath.Join(dir, archSub, pcanDLLName))
+			}
+		}
+	}
+
+	return candidates
+}
+
+func (p *PCAN) loadDLL() error {
+	candidates := pcanDLLCandidates()
 	var errs []string
 	for _, dllPath := range candidates {
 		dll := syscall.NewLazyDLL(dllPath)
