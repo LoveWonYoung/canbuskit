@@ -252,7 +252,7 @@ func NewUDSClient(dev driver.CANDriver, addr *isotp.Address, cfg isotp.Config) (
 	// 1. 初始化适配器并启动硬件驱动
 	adapter, err := driver.NewAdapter(dev)
 	if err != nil {
-		return nil, fmt.Errorf("无法创建Toomoss适配器: %w", err)
+		return nil, fmt.Errorf("The adapter cannot be created.: %w", err)
 	}
 
 	// 2. 初始化ISOTP协议栈
