@@ -156,6 +156,10 @@ func (p *PCAN) Write(id int32, data []byte) error {
 		msg.ID = uint32(id)
 		msg.MsgType = pcanMessageFD | pcanMessageBRS
 		msg.DLC = dataLenToDlc(len(data))
+		// 厂商限制，只能这样做
+		if msg.DLC < 8 {
+			msg.DLC = 8
+		}
 		copy(msg.Data[:], data)
 		status := p.callWriteFD(&msg)
 		if status != pcanErrorOK {
