@@ -654,6 +654,7 @@ func (c *Toomoss) Write(id int32, data []byte) error {
 
 	canFDMsg[0].DLC = byte(len(data))
 	canFDMsg[0].Data = tempData
+
 	sendRet, _, _ := syscall.SyscallN(
 		CANFD_SendMsg,
 		uintptr(DevHandle[DEVIndex]),
@@ -663,11 +664,7 @@ func (c *Toomoss) Write(id int32, data []byte) error {
 	)
 
 	if int(sendRet) == len(canFDMsg) {
-		var tempTmsDlc byte = 8
-		if tmsDlc := dataLenToDlc(len(data)); tmsDlc >= 8 {
-			tempTmsDlc = tmsDlc
-		}
-		logCANMessage("TX", uint32(id), tempTmsDlc, canFDMsg[0].Data[:canFDMsg[0].DLC], c.canType)
+		logCANMessage("TX", uint32(id), canFDMsg[0].DLC, canFDMsg[0].Data[:canFDMsg[0].DLC], c.canType)
 	} else {
 		log.Printf("错误: CAN/CANFD消息发送失败, ID=0x%03X", id)
 		return errors.New("CAN/CANFD消息发送失败")
