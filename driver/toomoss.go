@@ -653,9 +653,6 @@ func (c *Toomoss) Write(id int32, data []byte) error {
 	}
 
 	canFDMsg[0].DLC = byte(len(data))
-	if byte(len(data)) < 8 {
-		canFDMsg[0].DLC = 8
-	}
 	canFDMsg[0].Data = tempData
 	sendRet, _, _ := syscall.SyscallN(
 		CANFD_SendMsg,

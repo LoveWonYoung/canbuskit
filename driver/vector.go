@@ -21,7 +21,7 @@ const (
 
 	vectorDefaultHwTypeVN1640 = 59
 	vectorDefaultHwIndex      = 0
-	vectorDefaultChannel      = 0 // Vector API channel is 0-based; channel 1 in UI maps to 0 here.
+	vectorDefaultChannel      = 1 // Vector API channel is 0-based; channel 1 in UI maps to 0 here.
 
 	vectorDefaultBitrate     = 500000
 	vectorDefaultDataBitrate = 2000000
@@ -257,7 +257,8 @@ func (v *Vector) Write(id int32, data []byte) error {
 		txEvent.Tag = vectorCanFdTxTag
 		txEvent.TransID = 0xFFFF
 		txEvent.TagData.CanMsg.CanID = uint32(id)
-		txEvent.TagData.CanMsg.MsgFlags = vectorCanFdTxFlagEDL | vectorCanFdTxFlagBRS
+		// txEvent.TagData.CanMsg.MsgFlags = vectorCanFdTxFlagEDL | vectorCanFdTxFlagBRS
+		txEvent.TagData.CanMsg.MsgFlags = vectorCanFdTxFlagEDL
 		txEvent.TagData.CanMsg.DLC = dataLenToDlc(len(data))
 		copy(txEvent.TagData.CanMsg.Data[:], data)
 

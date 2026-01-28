@@ -341,9 +341,6 @@ func (t *TSMaster) Write(id int32, data []byte) error {
 	canfdMsg.FIdentifier = id
 	canfdMsg.FProperties = 1
 	canfdMsg.FDLC = dataLenToDlc(len(data))
-	if len(data) < 8 {
-		canfdMsg.FDLC = 8
-	}
 	canfdMsg.FFDProperties = uint8(t.canType)
 	// 复制数据到CAN消息
 	maxLen := dlcToLen(canfdMsg.FDLC)
