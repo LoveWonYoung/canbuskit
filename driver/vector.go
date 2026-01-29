@@ -19,9 +19,9 @@ const (
 	vectorDLLName32 = "vxlapi.dll"
 	vectorDLLName64 = "vxlapi64.dll"
 
-	vectorDefaultHwTypeVN1640 = 59
+//	vectorDefaultHwTypeVN1640 = 59
 	vectorDefaultHwIndex      = 0
-	vectorDefaultChannel      = 2 // Vector API channel is 0-based; channel 1 in UI maps to 0 here.
+	//	vectorDefaultChannel      = 2 // Vector API channel is 0-based; channel 1 in UI maps to 0 here.
 
 	vectorDefaultBitrate     = 500000
 	vectorDefaultDataBitrate = 2000000
@@ -169,9 +169,12 @@ type Vector struct {
 	channelIndex   int32
 	channelMask    uint64
 	permissionMask uint64
+
+	DeviceType     int
+	CANChannel 	   int
 }
 
-func NewVector(canType CanType) *Vector {
+func NewVector(canType CanType,deviceType int, canChannel int) *Vector {
 	ctx, cancel := context.WithCancel(context.Background())
 	return &Vector{
 		canType:    canType,
@@ -179,6 +182,8 @@ func NewVector(canType CanType) *Vector {
 		ctx:        ctx,
 		cancel:     cancel,
 		portHandle: vectorInvalidPortHandle,
+		DeviceType: deviceType,
+		CANChannel:canChannel,
 	}
 }
 
@@ -379,13 +384,13 @@ func (v *Vector) selectChannel() error {
 		return errors.New("xlGetChannelIndex not loaded")
 	}
 	r1, _, _ := v.getChannelIndexProc.Call(
-		uintptr(vectorDefaultHwTypeVN1640),
+		uintptr(v.DeviceType),
 		uintptr(vectorDefaultHwIndex),
-		uintptr(vectorDefaultChannel),
+		uintptr(v.CANChannel),
 	)
 	idx := int32(r1)
 	if idx < 0 || idx > 63 {
-		return fmt.Errorf("vector channel not found (hwType=%d hwIndex=%d hwChannel=%d)", vectorDefaultHwTypeVN1640, vectorDefaultHwIndex, vectorDefaultChannel)
+		return fmt.Errorf("vector channel not found (hwType=%d hwIndex=%d hwChannel=%d)", v.DeviceType, vectorDefaultHwIndex, v.CANChannel)
 	}
 	v.channelIndex = idx
 	v.channelMask = uint64(1) << uint(idx)
