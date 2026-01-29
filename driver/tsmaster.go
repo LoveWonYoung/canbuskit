@@ -213,13 +213,13 @@ func (t *TSMaster) Init() error {
 	// 设置CAN通道数量
 	r, _, _ = t.loader.GetProcAddress("tsapp_set_can_channel_count").Call(uintptr(1))
 	fmt.Printf("Set CAN channel count result: %d\n", r)
-
+	deviceName, _ := syscall.UTF16PtrFromString("TC1016")
 	// 设置映射
 	r, _, _ = t.loader.GetProcAddress("tsapp_set_mapping_verbose").Call(
 		uintptr(unsafe.Pointer(appName)),
 		uintptr(0),
 		uintptr(0),
-		uintptr(unsafe.Pointer(syscall.StringToUTF16Ptr("TC1016"))),
+		uintptr(unsafe.Pointer(deviceName)),
 		uintptr(3),
 		uintptr(11),
 		uintptr(0),

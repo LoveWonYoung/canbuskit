@@ -70,11 +70,12 @@ type pcanTimestamp struct {
 }
 
 type PCAN struct {
-	rxChan  chan UnifiedCANMessage
-	ctx     context.Context
-	cancel  context.CancelFunc
-	canType CanType
-	handle  uint16
+	rxChan     chan UnifiedCANMessage
+	ctx        context.Context
+	cancel     context.CancelFunc
+	canType    CanType
+	handle     uint16
+	CANChannel byte
 
 	dll              *syscall.LazyDLL
 	initProc         *syscall.LazyProc
@@ -87,15 +88,16 @@ type PCAN struct {
 	getErrorTextProc *syscall.LazyProc
 }
 
-func NewPCAN(canType CanType) *PCAN {
+func NewPCAN(canType CanType, canChannel byte) *PCAN {
 	ctx, cancel := context.WithCancel(context.Background())
-	handle, _ := pcanUSBHandle(pcanDefaultChannel)
+	handle, _ := pcanUSBHandle(int(canChannel))
 	return &PCAN{
-		rxChan:  make(chan UnifiedCANMessage, RxChannelBufferSize),
-		ctx:     ctx,
-		cancel:  cancel,
-		canType: canType,
-		handle:  handle,
+		rxChan:     make(chan UnifiedCANMessage, RxChannelBufferSize),
+		ctx:        ctx,
+		cancel:     cancel,
+		canType:    canType,
+		handle:     handle,
+		CANChannel: canChannel,
 	}
 }
 
@@ -103,7 +105,7 @@ func (p *PCAN) Init() error {
 	p.ctx, p.cancel = context.WithCancel(context.Background())
 	p.rxChan = make(chan UnifiedCANMessage, RxChannelBufferSize)
 
-	handle, err := pcanUSBHandle(pcanDefaultChannel)
+	handle, err := pcanUSBHandle(int(p.CANChannel))
 	if err != nil {
 		return err
 	}

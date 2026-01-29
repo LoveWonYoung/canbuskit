@@ -2,6 +2,19 @@ package driver
 
 import "time"
 
+const (
+	CHANNEL1 = iota
+	CHANNEL2
+	CHANNEL3
+	CHANNEL4
+)
+
+// Vector
+const (
+	CANOEVN1630 = 57
+	CANOEVN1640 = 59
+)
+
 // 缓冲区和轮询配置常量
 const (
 	RxChannelBufferSize = 1024                  // 接收通道缓冲区大小

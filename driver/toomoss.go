@@ -445,7 +445,7 @@ type CANFD_MSG struct {
 }
 
 const (
-	CanChannel  = 0
+	//	c.CANChannel  = 0
 	SpeedBpsNBT = 500_000
 	SpeedBpsDBT = 200_0000
 )
@@ -464,25 +464,28 @@ const (
 
 const (
 	CAN_MSG_FLAG_STD   = 0
-	CANFD_MSG_FLAG_BRS = 0x01 // CANFD加速帧标志
-	CANFD_MSG_FLAG_ESI = 0x02 // CANFD错误状态指示
-	CANFD_MSG_FLAG_FDF = 0x04 // CANFD帧标志
+	CANFD_MSG_FLAG_BRS = 1 << (iota - 1) // CANFD加速帧标志
+	CANFD_MSG_FLAG_ESI                   // CANFD错误状态指示
+	CANFD_MSG_FLAG_FDF                   // CANFD帧标志
+	f
 )
 
 type Toomoss struct {
-	rxChan  chan UnifiedCANMessage
-	ctx     context.Context
-	cancel  context.CancelFunc
-	canType CanType
+	rxChan     chan UnifiedCANMessage
+	ctx        context.Context
+	cancel     context.CancelFunc
+	canType    CanType
+	CANChannel byte
 }
 
-func NewToomoss(canType CanType) *Toomoss {
+func NewToomoss(canType CanType, canChannel byte) *Toomoss {
 	ctx, cancel := context.WithCancel(context.Background())
 	return &Toomoss{
-		rxChan:  make(chan UnifiedCANMessage, RxChannelBufferSize),
-		ctx:     ctx,
-		cancel:  cancel,
-		canType: canType,
+		rxChan:     make(chan UnifiedCANMessage, RxChannelBufferSize),
+		ctx:        ctx,
+		cancel:     cancel,
+		canType:    canType,
+		CANChannel: canChannel,
 	}
 }
 
@@ -528,7 +531,7 @@ func (c *Toomoss) Init() error {
 	canfdInit, _, callErr := syscall.SyscallN(
 		CANFDInit,
 		uintptr(DevHandle[DEVIndex]),
-		uintptr(CanChannel),
+		uintptr(c.CANChannel),
 		uintptr(unsafe.Pointer(&canFDInitConfig)),
 	)
 	if callErr != 0 {
@@ -537,7 +540,7 @@ func (c *Toomoss) Init() error {
 	fdStart, _, callErr := syscall.SyscallN(
 		CANFDStartGetMsg,
 		uintptr(DevHandle[DEVIndex]),
-		uintptr(CanChannel),
+		uintptr(c.CANChannel),
 	)
 	if callErr != 0 {
 		return fmt.Errorf("CANFD_StartGetMsg syscall failed: %w", callErr)
@@ -577,7 +580,7 @@ func (c *Toomoss) readLoop() {
 			getCanFDMsgNum, _, _ := syscall.SyscallN(
 				CANFD_GetMsg,
 				uintptr(DevHandle[DEVIndex]),
-				uintptr(CanChannel),
+				uintptr(c.CANChannel),
 				uintptr(unsafe.Pointer(&canFDMsg[0])),
 				uintptr(len(canFDMsg)),
 			)
@@ -620,7 +623,7 @@ func (c *Toomoss) drainInitialBuffer() {
 		n, _, _ := syscall.SyscallN(
 			CANFD_GetMsg,
 			uintptr(DevHandle[DEVIndex]),
-			uintptr(CanChannel),
+			uintptr(c.CANChannel),
 			uintptr(unsafe.Pointer(&canFDMsg[0])),
 			uintptr(len(canFDMsg)),
 		)
@@ -658,7 +661,7 @@ func (c *Toomoss) Write(id int32, data []byte) error {
 	sendRet, _, _ := syscall.SyscallN(
 		CANFD_SendMsg,
 		uintptr(DevHandle[DEVIndex]),
-		uintptr(CanChannel),
+		uintptr(c.CANChannel),
 		uintptr(unsafe.Pointer(&canFDMsg[0])),
 		uintptr(len(canFDMsg)),
 	)

@@ -30,3 +30,9 @@ go.work.sum
 # Editor/IDE
 # .idea/
 # .vscode/
+main.go
+2026*
+2025*
+DLLs*
+log*
+.fleet/

@@ -8,13 +8,13 @@ import (
 	"github.com/LoveWonYoung/canbuskit/tp_layer"
 )
 
-// Adapter 是连接 udsclient 和 can device 硬件的适配器
+// Adapter is link udsclient hardware adapter of can device
 type Adapter struct {
 	driver CANDriver
 	rxChan <-chan UnifiedCANMessage
 }
 
-// NewAdapter 是适配器的构造函数
+// NewAdapter is adapter create
 func NewAdapter(dev CANDriver) (*Adapter, error) {
 	if dev == nil {
 		return nil, errors.New("CAN driver instance cannot be nil")
@@ -33,13 +33,13 @@ func NewAdapter(dev CANDriver) (*Adapter, error) {
 	return adapter, nil
 }
 
-// Close 用于停止驱动并释放资源
+// Close stop driver
 func (t *Adapter) Close() {
 	log.Println("Closing CAN adapter...")
 	t.driver.Stop()
 }
 
-// TxFunc 是发送函数
+// TxFunc is send function
 func (t *Adapter) TxFunc(msg tp_layer.CanMessage) {
 	err := t.driver.Write(int32(msg.ArbitrationID), msg.Data)
 	if err != nil {
@@ -47,7 +47,7 @@ func (t *Adapter) TxFunc(msg tp_layer.CanMessage) {
 	}
 }
 
-// RxFunc 是接收函数
+// RxFunc is receive function
 func (t *Adapter) RxFunc() (tp_layer.CanMessage, bool) {
 	select {
 	case receivedMsg, ok := <-t.rxChan:

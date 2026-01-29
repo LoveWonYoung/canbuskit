@@ -21,7 +21,7 @@ const (
 
 	vectorDefaultHwTypeVN1640 = 59
 	vectorDefaultHwIndex      = 0
-	vectorDefaultChannel      = 1 // Vector API channel is 0-based; channel 1 in UI maps to 0 here.
+	vectorDefaultChannel      = 2 // Vector API channel is 0-based; channel 1 in UI maps to 0 here.
 
 	vectorDefaultBitrate     = 500000
 	vectorDefaultDataBitrate = 2000000
@@ -604,7 +604,7 @@ func bytePtrToString(p *byte) string {
 	if p == nil {
 		return ""
 	}
-	buf := make([]byte, 0, 64)
+	buf := make([]byte, 0, 128)
 	for *p != 0 {
 		buf = append(buf, *p)
 		p = (*byte)(unsafe.Pointer(uintptr(unsafe.Pointer(p)) + 1))
