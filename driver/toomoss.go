@@ -638,7 +638,7 @@ func (c *Toomoss) Write(id int32, data []byte) error {
 		return fmt.Errorf("数据长度 %d ", len(data))
 	} else if len(data) > 64 && c.canType == CANFD {
 		return fmt.Errorf("数据长度 %d 超过CAN-FD最大长度64", len(data))
-	} else if len(data) >= 8 && c.canType == CAN {
+	} else if len(data) > 8 && c.canType == CAN {
 		return fmt.Errorf("数据长度 %d 超过CAN最大长度8", len(data))
 	}
 
