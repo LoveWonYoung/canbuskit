@@ -4,8 +4,8 @@ import (
 	"encoding/binary"
 	"fmt"
 	"os"
-
-	"github.com/marcinbor85/gohex"
+	"path/filepath"
+	"strings"
 )
 
 type HexSegment struct {
@@ -45,24 +45,24 @@ func ParseHexSegments(filepath string, blockSize int) ([]HexSegment, error) {
 		return nil, fmt.Errorf("blockSize must be > 0")
 	}
 
-	hexFile, err := os.Open(filepath)
+	raw, err := os.ReadFile(filepath)
 	if err != nil {
 		return nil, err
 	}
-	defer hexFile.Close()
 
-	readHex := gohex.NewMemory()
-	if err := readHex.ParseIntelHex(hexFile); err != nil {
+	file, err := parseBincopyFile(filepath, string(raw))
+	if err != nil {
 		return nil, err
 	}
-
-	segments := readHex.GetDataSegments()
-	if len(segments) == 0 {
-		return nil, fmt.Errorf("no data segments found in hex file")
+	if len(file.Segments) == 0 {
+		return nil, fmt.Errorf("no data segments found in file")
 	}
 
-	out := make([]HexSegment, 0, len(segments))
-	for _, seg := range segments {
+	out := make([]HexSegment, 0, len(file.Segments))
+	for _, seg := range file.Segments {
+		if len(seg.Data) == 0 {
+			continue
+		}
 		out = append(out, HexSegment{
 			Address: seg.Address,
 			Data:    seg.Data,
@@ -70,7 +70,44 @@ func ParseHexSegments(filepath string, blockSize int) ([]HexSegment, error) {
 		})
 	}
 
+	if len(out) == 0 {
+		return nil, fmt.Errorf("no data segments found in file")
+	}
 	return out, nil
+}
+
+func parseBincopyFile(path string, content string) (*File, error) {
+	ext := strings.ToLower(filepath.Ext(path))
+	switch ext {
+	case ".hex", ".ihex":
+		return ParseIhex(content)
+	case ".s19", ".srec", ".s28", ".s37", ".serc":
+		return ParseSrec(content)
+	default:
+		return parseBincopyByContent(content)
+	}
+}
+
+func parseBincopyByContent(content string) (*File, error) {
+	for _, line := range strings.Split(content, "\n") {
+		record := strings.TrimSpace(line)
+		if record == "" {
+			continue
+		}
+		record = strings.TrimPrefix(record, "\uFEFF")
+		if record == "" {
+			continue
+		}
+		switch record[0] {
+		case ':':
+			return ParseIhex(content)
+		case 'S':
+			return ParseSrec(content)
+		default:
+			return nil, fmt.Errorf("unsupported file format: first record starts with %q", record[0])
+		}
+	}
+	return nil, fmt.Errorf("empty file")
 }
 
 func MyHexParser(
