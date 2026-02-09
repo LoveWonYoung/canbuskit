@@ -106,51 +106,26 @@ func (t *Transport) Run(ctx context.Context, rxChan <-chan CanMessage, txChan ch
 	defer t.cleanup()
 
 	for {
-		// Calculate nearest timeout for select (if we were using a single timer, but we have 3)
-		// With 3 timers, we just select on their channels.
-
 		select {
 		case <-ctx.Done():
 			return
-
 		case msg := <-rxChan:
 			t.ProcessRx(msg, txChan)
-
 		case data := <-t.txDataChan:
-			// User wants to send data
 			if t.txState == StateIdle {
-				// Start transmission
 				t.startTransmission(data, txChan)
 			} else {
-				// We are busy, for now drop or maybe we should have buffered in txDataChan?
-				// txDataChan IS the buffer. If we are here, we pulled it out.
-				// But tp_layer only handles one message at a time.
-				// If we are already transmitting, we can't really start another one until finished.
-				// However, the channel read should be controlled.
-				// We should ONLY read from txDataChan if we are in StateIdle.
-				// BUT 'select' doesn't support disabling cases easily without nil channels.
-				// Let's use the nil-channel pattern.
 				t.fireError(errors.New("Error: Concurrent underlying send (logic error in select handling)"))
 			}
-
 		case <-t.timerRxCF.C:
-			// Rx Timeout waiting for Consecutive Frame
 			fmt.Println("接收连续帧超时，重置接收状态。")
 			t.stopReceiving()
-
 		case <-t.timerRxFC.C:
-			// Tx Timeout waiting for Flow Control
 			fmt.Println("等待流控帧超时，停止发送。")
 			t.stopSending()
-
 		case <-t.timerTxSTmin.C:
-			// Tx STmin timer expired, ready to send next CF
 			t.handleTxTransmit(txChan)
 		}
-
-		// Post-event check: Are we idle? If so, we can accept new Tx data.
-		// To implement "only read txDataChan when Idle", we can split the select or use a variable channel.
-		// Actually, let's refine the loop below.
 	}
 }
 
@@ -197,8 +172,6 @@ func (t *Transport) cleanup() {
 }
 
 func (t *Transport) startTransmission(data []byte, txChan chan<- CanMessage) {
-	// ... Logic from handleTxIdle ...
-	// Requires refactoring handleTxIdle to direct action instead of returning msg
 	t.initiateTx(data, txChan)
 }
 
@@ -210,7 +183,6 @@ func (t *Transport) stopReceiving() {
 	t.rxSeqNum = 0
 	t.rxBlockCounter = 0
 	if !t.timerRxCF.Stop() {
-		// drain channel if needed
 		select {
 		case <-t.timerRxCF.C:
 		default:
@@ -252,30 +224,9 @@ func (t *Transport) makeTxMsgWithAddr(addr *Address, data []byte, addrType Addre
 
 	// Padding
 	if t.config.PaddingByte != nil {
-		if t.IsFD {
-			// For FD, we pad to next valid DLC. But simple padding: if < 8 pad to 8.
-			// If > 8, valid DLCs are 12, 16, 20, 24, 32, 48, 64.
-			// Implement simple logic: if < 8, pad to 8. CAN FD devices might handle DLC automatically
-			// but we should provide correct length.
-			// NOTE: python-can-tp_layer pads to 8 for Classic CAN.
-			// For FD, it pads to min_length if specified.
-			// Let's implement standard padding to 8 for Classic CAN (IsFD=false).
-			// For FD, we leave it unless max length is needed?
-			// Spec says padding is used to avoid variable length frames in some cases.
-			// Let's stick to: if !IsFD and len < 8, pad.
-		}
-
 		targetLen := 8
 		if t.IsFD {
-			// For FD, we could pad to nearest DLC, but let's stick to 8 if small.
-			// Actually, usually padding is ONLY for classic CAN to make it exactly 8.
-			if len(fullPayload) < 8 {
-				targetLen = 8
-			} else {
-				targetLen = len(fullPayload)
-			}
-		} else {
-			targetLen = 8
+			targetLen = nextFDTargetLength(len(fullPayload))
 		}
 
 		if len(fullPayload) < targetLen {
@@ -292,6 +243,30 @@ func (t *Transport) makeTxMsgWithAddr(addr *Address, data []byte, addrType Addre
 		Data:          fullPayload,
 		IsExtendedID:  addr.Is29Bit(),
 		IsFD:          t.IsFD,
+	}
+}
+
+// nextFDTargetLength returns the smallest CAN FD data length that is >= length.
+// Valid CAN FD payload sizes are 0-8, 12, 16, 20, 24, 32, 48, 64.
+func nextFDTargetLength(length int) int {
+	if length <= 8 {
+		return 8
+	}
+	switch {
+	case length <= 12:
+		return 12
+	case length <= 16:
+		return 16
+	case length <= 20:
+		return 20
+	case length <= 24:
+		return 24
+	case length <= 32:
+		return 32
+	case length <= 48:
+		return 48
+	default:
+		return 64
 	}
 }
 

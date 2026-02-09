@@ -7,27 +7,20 @@ import (
 )
 
 const (
-	// pciTypeSingleFrame (SF) 是 0
-	pciTypeSingleFrame = 0x00
-	// pciTypeFirstFrame (FF) 是 1
-	pciTypeFirstFrame = 0x10
-	// pciTypeConsecutiveFrame (CF) 是 2
+	pciTypeSingleFrame      = 0x00
+	pciTypeFirstFrame       = 0x10
 	pciTypeConsecutiveFrame = 0x20
-	// pciTypeFlowControl (FC) 是 3
-	pciTypeFlowControl = 0x30
+	pciTypeFlowControl      = 0x30
 )
 
 // createFlowControlPayload 创建流控帧的数据负载
 func createFlowControlPayload(status FlowStatus, blockSize int, stMinMs int) []byte {
-	// 将 stMinMs 编码为字节
 	var stMinByte byte
 	if stMinMs >= 0 && stMinMs <= 127 {
 		stMinByte = byte(stMinMs)
 	} else {
-		// 这里可以添加对微秒的编码，暂时简化
 		stMinByte = 0x7F // 默认最大
 	}
-
 	return []byte{
 		pciTypeFlowControl | byte(status),
 		byte(blockSize),
@@ -39,12 +32,9 @@ func createFlowControlPayload(status FlowStatus, blockSize int, stMinMs int) []b
 func createSingleFramePayload(data []byte, maxDataLength int) ([]byte, error) {
 	dataLen := len(data)
 	var pci []byte
-
-	// 根据数据长度决定PCI格式
 	if dataLen <= 7 {
 		pci = []byte{pciTypeSingleFrame | byte(dataLen)}
 	} else {
-		// CAN FD 使用长度转义
 		pci = []byte{pciTypeSingleFrame, byte(dataLen)}
 	}
 

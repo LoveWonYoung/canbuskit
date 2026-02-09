@@ -25,23 +25,15 @@ const (
 
 // Address 存储了所有与寻址相关的信息
 type Address struct {
-	AddressingMode AddressingMode
-
-	// 用于 Normal, Extended, Mixed 模式
-	TxID uint32
-	RxID uint32
-
-	// 用于 NormalFixed, Mixed 模式
-	TargetAddress byte // 目标ECU地址 (TA)
-	SourceAddress byte // 源ECU地址 (SA)
-
-	// 用于 Extended, Mixed 模式
-	AddressExtension byte // 地址扩展字节
-
-	// 自动计算的字段
-	TxPayloadPrefix []byte // 发送时附加到数据负载的前缀
-	RxPrefixSize    int    // 接收时需跳过的负载前缀大小
-	is29Bit         bool   // 缓存当前模式是否为29位
+	AddressingMode   AddressingMode
+	TxID             uint32
+	RxID             uint32
+	TargetAddress    byte
+	SourceAddress    byte
+	AddressExtension byte
+	TxPayloadPrefix  []byte
+	RxPrefixSize     int
+	is29Bit          bool
 }
 
 // NewAddress 是一个灵活的构造函数，用于创建地址对象
@@ -101,14 +93,12 @@ func (a *Address) GetTxArbitrationID(addrType AddressType) uint32 {
 	case Normal11Bit, Normal29Bit, Extended11Bit, Extended29Bit, Mixed11Bit:
 		return a.TxID
 	case NormalFixed29Bit:
-		// 18DA[TA][SA] for physical, 18DB[TA][SA] for functional
 		prefix := uint32(0x18DA0000)
 		if addrType == Functional {
 			prefix = 0x18DB0000
 		}
 		return prefix | (uint32(a.TargetAddress) << 8) | uint32(a.SourceAddress)
 	case Mixed29Bit:
-		// 18CE[TA][SA] for physical, 18CD[TA][SA] for functional
 		prefix := uint32(0x18CE0000)
 		if addrType == Functional {
 			prefix = 0x18CD0000
@@ -128,9 +118,6 @@ func (a *Address) IsForMe(msg *CanMessage) bool {
 	case Normal11Bit, Normal29Bit:
 		return msg.ArbitrationID == a.RxID
 	case NormalFixed29Bit:
-		// Check if the NormalFixed ID matches our expected TA/SA
-		// This requires a more complex check if we need to support multiple SAs
-		// Simplified for now: check the base ID format
 		return (msg.ArbitrationID & 0xFFFF0000) == (a.GetTxArbitrationID(Physical) & 0xFFFF0000)
 	case Extended11Bit, Extended29Bit:
 		if msg.ArbitrationID != a.RxID {
@@ -139,8 +126,7 @@ func (a *Address) IsForMe(msg *CanMessage) bool {
 		if len(msg.Data) < 1 {
 			return false // No address extension byte
 		}
-		// In extended addressing, the first data byte is the target address (us).
-		return msg.Data[0] == a.SourceAddress // Note: When we receive, their TA is our SA
+		return msg.Data[0] == a.SourceAddress
 	case Mixed29Bit:
 		// A combination of NormalFixed and Extended checks
 		if (msg.ArbitrationID & 0xFFFF0000) != (a.GetTxArbitrationID(Physical) & 0xFFFF0000) {
