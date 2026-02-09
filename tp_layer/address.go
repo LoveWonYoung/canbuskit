@@ -136,6 +136,8 @@ func (a *Address) IsForMe(msg *CanMessage) bool {
 			return false
 		}
 		return msg.Data[0] == a.AddressExtension
+	default:
+		panic("unhandled default case")
 	}
 	return false
 }
