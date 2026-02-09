@@ -122,9 +122,6 @@ func (t *Transport) handleTxFlowControl(fc *FlowControlFrame, txChan chan<- CanM
 // It is called when STmin timer expires.
 func (t *Transport) handleTxTransmit(txChan chan<- CanMessage) {
 	if len(t.txBuffer) == 0 {
-		// Should have been finished?
-		// If buffer is empty but we are here, maybe we just finished exact fit?
-		// Usually we check completion after sending.
 		t.stopSending()
 		return
 	}
@@ -195,7 +192,5 @@ func (t *Transport) resetTxSTminTimer(d time.Duration) {
 		default:
 		}
 	}
-	// If d is 0, Timer might fire immediately or we should just fire?
-	// time.Reset(0) blocks or fires? documentation says 0 is valid.
 	t.timerTxSTmin.Reset(d)
 }

@@ -109,7 +109,7 @@ func (s *SecurityAccess) ComputeKeyWithLength(level int, seed []byte, keyLen int
 		uintptr(unsafe.Pointer(&key[0])),
 	)
 	runtime.KeepAlive(seed)
-	if callErr != syscall.Errno(0) {
+	if !errors.Is(callErr, syscall.Errno(0)) {
 		return nil, fmt.Errorf("SecKeyCmac call failed: %w", callErr)
 	}
 	return key, nil

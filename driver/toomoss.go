@@ -229,7 +229,12 @@ func findRegistryPathInView(uninstall, label string, access uint32) string {
 		fmt.Println("OpenKey HKLM", label, "view failed:", err)
 		return ""
 	}
-	defer k.Close()
+	defer func(k registry.Key) {
+		err := k.Close()
+		if err != nil {
+
+		}
+	}(k)
 
 	names, err := k.ReadSubKeyNames(-1)
 	if err != nil {
@@ -250,7 +255,10 @@ func findRegistryPathInView(uninstall, label string, access uint32) string {
 		install, _, _ := sk.GetStringValue("InstallLocation")
 		appPath, _, _ := sk.GetStringValue("Inno Setup: App Path")
 		unins, _, _ := sk.GetStringValue("UninstallString")
-		sk.Close()
+		err = sk.Close()
+		if err != nil {
+			return ""
+		}
 
 		pubL := strings.ToLower(strings.TrimSpace(publisher))
 		dnL := strings.ToLower(strings.TrimSpace(displayName))
@@ -293,7 +301,10 @@ func findRegistryPathInView(uninstall, label string, access uint32) string {
 		install, _, _ := sk.GetStringValue("InstallLocation")
 		appPath, _, _ := sk.GetStringValue("Inno Setup: App Path")
 		unins, _, _ := sk.GetStringValue("UninstallString")
-		sk.Close()
+		err = sk.Close()
+		if err != nil {
+			return ""
+		}
 
 		install = strings.TrimSpace(install)
 		if install != "" && pathLooksToomoss(install) {

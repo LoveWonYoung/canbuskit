@@ -275,8 +275,6 @@ func (t *Transport) fireError(err error) {
 	select {
 	case t.ErrorChan <- err:
 	default:
-		// Channel full, drop error or maybe log to stdlib log?
-		// For now we just drop to prevent blocking the stack.
 		fmt.Println("ISOTP Error (Chan Full):", err)
 	}
 }

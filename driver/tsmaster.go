@@ -59,9 +59,9 @@ func (t *TSMasterLoader) findDLLPath() (string, error) {
 	if t.fileExists(dllPath) {
 		fmt.Println("find dll ", dllPath)
 		return dllPath, nil
-	} else {
-		fmt.Println("not find dll ", dllPath)
 	}
+
+	fmt.Println("not find dll ", dllPath)
 
 	// 2. 如果当前路径未找到，再从注册表获取
 	if path, err := t.getDLLFromRegistry(); err == nil && path != "" {

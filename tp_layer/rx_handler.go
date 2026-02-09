@@ -5,7 +5,7 @@ import (
 	"fmt"
 )
 
-// Modified to take txChan to allow sending FlowControl frames directly
+// ProcessRx Modified to take txChan to allow sending FlowControl frames directly
 func (t *Transport) ProcessRx(msg CanMessage, txChan chan<- CanMessage) {
 	if !t.address.IsForMe(&msg) {
 		return
