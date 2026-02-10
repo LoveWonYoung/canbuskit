@@ -140,6 +140,7 @@ type TSMaster struct {
 	loader      *TSMasterLoader
 	isConnected bool
 	rxChan      chan UnifiedCANMessage
+	fanout      *rxFanout
 	ctx         context.Context
 	cancel      context.CancelFunc
 	canType     CanType
@@ -163,6 +164,7 @@ func (t *TSMaster) Init() error {
 
 	// 初始化接收通道
 	t.rxChan = make(chan UnifiedCANMessage, RxChannelBufferSize)
+	t.fanout = newRxFanout(t.ctx, t.rxChan)
 
 	cleanup := func(err error) error {
 		if t.cancel != nil {
@@ -317,6 +319,10 @@ func (t *TSMaster) Stop() {
 		t.cancel()
 	}
 
+	if t.fanout != nil {
+		t.fanout.Close()
+	}
+
 	if t.loader != nil && t.isConnected {
 		r, _, _ := t.loader.GetProcAddress("tsapp_disconnect").Call()
 		fmt.Printf("Disconnect result: %d\n", r)
@@ -353,7 +359,10 @@ func (t *TSMaster) Write(id int32, data []byte) error {
 	return nil
 }
 func (t *TSMaster) RxChan() <-chan UnifiedCANMessage {
-	return t.rxChan
+	if t.fanout == nil {
+		return nil
+	}
+	return t.fanout.Subscribe(RxChannelBufferSize)
 }
 func (t *TSMaster) Context() context.Context {
 	if t.ctx != nil {

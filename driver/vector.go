@@ -19,8 +19,8 @@ const (
 	vectorDLLName32 = "vxlapi.dll"
 	vectorDLLName64 = "vxlapi64.dll"
 
-//	vectorDefaultHwTypeVN1640 = 59
-	vectorDefaultHwIndex      = 0
+	//	vectorDefaultHwTypeVN1640 = 59
+	vectorDefaultHwIndex = 0
 	//	vectorDefaultChannel      = 2 // Vector API channel is 0-based; channel 1 in UI maps to 0 here.
 
 	vectorDefaultBitrate     = 500000
@@ -143,6 +143,7 @@ type xlCanFdConf struct {
 type Vector struct {
 	canType CanType
 	rxChan  chan UnifiedCANMessage
+	fanout  *rxFanout
 	ctx     context.Context
 	cancel  context.CancelFunc
 
@@ -170,26 +171,28 @@ type Vector struct {
 	channelMask    uint64
 	permissionMask uint64
 
-	DeviceType     int
-	CANChannel 	   int
+	DeviceType int
+	CANChannel int
 }
 
-func NewVector(canType CanType,deviceType int, canChannel int) *Vector {
+func NewVector(canType CanType, deviceType int, canChannel int) *Vector {
 	ctx, cancel := context.WithCancel(context.Background())
 	return &Vector{
 		canType:    canType,
 		rxChan:     make(chan UnifiedCANMessage, RxChannelBufferSize),
+		fanout:     nil,
 		ctx:        ctx,
 		cancel:     cancel,
 		portHandle: vectorInvalidPortHandle,
 		DeviceType: deviceType,
-		CANChannel:canChannel,
+		CANChannel: canChannel,
 	}
 }
 
 func (v *Vector) Init() error {
 	v.ctx, v.cancel = context.WithCancel(context.Background())
 	v.rxChan = make(chan UnifiedCANMessage, RxChannelBufferSize)
+	v.fanout = newRxFanout(v.ctx, v.rxChan)
 	v.portHandle = vectorInvalidPortHandle
 
 	if err := v.loadDLL(); err != nil {
@@ -226,6 +229,10 @@ func (v *Vector) Start() {
 func (v *Vector) Stop() {
 	if v.cancel != nil {
 		v.cancel()
+	}
+
+	if v.fanout != nil {
+		v.fanout.Close()
 	}
 
 	if v.deactivateChannelProc != nil && v.portHandle != vectorInvalidPortHandle {
@@ -306,7 +313,12 @@ func (v *Vector) Write(id int32, data []byte) error {
 	}
 }
 
-func (v *Vector) RxChan() <-chan UnifiedCANMessage { return v.rxChan }
+func (v *Vector) RxChan() <-chan UnifiedCANMessage {
+	if v.fanout == nil {
+		return nil
+	}
+	return v.fanout.Subscribe(RxChannelBufferSize)
+}
 
 func (v *Vector) Context() context.Context { return v.ctx }
 

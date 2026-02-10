@@ -71,6 +71,7 @@ type pcanTimestamp struct {
 
 type PCAN struct {
 	rxChan     chan UnifiedCANMessage
+	fanout     *rxFanout
 	ctx        context.Context
 	cancel     context.CancelFunc
 	canType    CanType
@@ -93,6 +94,7 @@ func NewPCAN(canType CanType, canChannel byte) *PCAN {
 	handle, _ := pcanUSBHandle(int(canChannel))
 	return &PCAN{
 		rxChan:     make(chan UnifiedCANMessage, RxChannelBufferSize),
+		fanout:     nil,
 		ctx:        ctx,
 		cancel:     cancel,
 		canType:    canType,
@@ -104,6 +106,7 @@ func NewPCAN(canType CanType, canChannel byte) *PCAN {
 func (p *PCAN) Init() error {
 	p.ctx, p.cancel = context.WithCancel(context.Background())
 	p.rxChan = make(chan UnifiedCANMessage, RxChannelBufferSize)
+	p.fanout = newRxFanout(p.ctx, p.rxChan)
 
 	handle, err := pcanUSBHandle(int(p.CANChannel))
 	if err != nil {
@@ -135,6 +138,9 @@ func (p *PCAN) Stop() {
 	log.Println("Stopping PCAN driver...")
 	if p.cancel != nil {
 		p.cancel()
+	}
+	if p.fanout != nil {
+		p.fanout.Close()
 	}
 	if p.uninitProc != nil {
 		_, _, _ = p.uninitProc.Call(uintptr(p.handle))
@@ -182,7 +188,12 @@ func (p *PCAN) Write(id int32, data []byte) error {
 	}
 }
 
-func (p *PCAN) RxChan() <-chan UnifiedCANMessage { return p.rxChan }
+func (p *PCAN) RxChan() <-chan UnifiedCANMessage {
+	if p.fanout == nil {
+		return nil
+	}
+	return p.fanout.Subscribe(RxChannelBufferSize)
+}
 
 func (p *PCAN) Context() context.Context { return p.ctx }
 

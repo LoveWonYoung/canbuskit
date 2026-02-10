@@ -483,6 +483,7 @@ const (
 
 type Toomoss struct {
 	rxChan     chan UnifiedCANMessage
+	fanout     *rxFanout
 	ctx        context.Context
 	cancel     context.CancelFunc
 	canType    CanType
@@ -490,9 +491,11 @@ type Toomoss struct {
 }
 
 func NewToomoss(canType CanType, canChannel byte) *Toomoss {
+	rxChan := make(chan UnifiedCANMessage, RxChannelBufferSize)
 	ctx, cancel := context.WithCancel(context.Background())
 	return &Toomoss{
-		rxChan:     make(chan UnifiedCANMessage, RxChannelBufferSize),
+		rxChan:     rxChan,
+		fanout:     newRxFanout(ctx, rxChan),
 		ctx:        ctx,
 		cancel:     cancel,
 		canType:    canType,
@@ -574,6 +577,9 @@ func (c *Toomoss) Start() {
 func (c *Toomoss) Stop() {
 	log.Println("正在停止CAN-FD驱动的读取服务...")
 	c.cancel()
+	if c.fanout != nil {
+		c.fanout.Close()
+	}
 	if err := usbClose(); err != nil {
 		log.Printf("警告: USB关闭失败: %v", err)
 	}
@@ -686,6 +692,11 @@ func (c *Toomoss) Write(id int32, data []byte) error {
 	return nil
 }
 
-func (c *Toomoss) RxChan() <-chan UnifiedCANMessage { return c.rxChan }
+func (c *Toomoss) RxChan() <-chan UnifiedCANMessage {
+	if c.fanout == nil {
+		return nil
+	}
+	return c.fanout.Subscribe(RxChannelBufferSize)
+}
 
 func (c *Toomoss) Context() context.Context { return c.ctx }
