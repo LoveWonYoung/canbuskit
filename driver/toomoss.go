@@ -613,7 +613,7 @@ func (c *Toomoss) readLoop() {
 					continue
 				}
 				unifiedMsg := UnifiedCANMessage{
-					ID: msg.ID, DLC: msg.DLC, Data: msg.Data, IsFD: msg.Flags == CANFD_MSG_FLAG_FDF,
+					Direction: RX, ID: msg.ID, DLC: msg.DLC, Data: msg.Data, IsFD: msg.Flags&4 != 0,
 				}
 
 				msgType := c.canType
@@ -684,7 +684,16 @@ func (c *Toomoss) Write(id int32, data []byte) error {
 	)
 
 	if int(sendRet) == len(canFDMsg) {
+		unifiedMsg := UnifiedCANMessage{
+			Direction: TX, ID: canFDMsg[0].ID, DLC: canFDMsg[0].DLC, Data: canFDMsg[0].Data, IsFD: canFDMsg[0].Flags&4 != 0,
+		}
+
 		logCANMessage("TX", uint32(id), canFDMsg[0].DLC, canFDMsg[0].Data[:canFDMsg[0].DLC], c.canType)
+		select {
+		case c.rxChan <- unifiedMsg:
+		default:
+			log.Println("警告: 驱动接收channel(FD)已满，消息被丢弃")
+		}
 	} else {
 		log.Printf("错误: CAN/CANFD消息发送失败, ID=0x%03X", id)
 		return errors.New("CAN/CANFD消息发送失败")

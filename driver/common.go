@@ -5,6 +5,13 @@ import (
 	"log"
 )
 
+type DirectionType byte
+
+const (
+	TX DirectionType = iota
+	RX
+)
+
 // dataLenToDlc 将CAN/CAN-FD的实际数据字节长度转换为DLC码
 func dataLenToDlc(len int) byte {
 	if len <= 8 {
@@ -67,10 +74,11 @@ func logCANMessage(direction string, id uint32, dlc byte, data []byte, canType C
 
 // UnifiedCANMessage 是一个通用的CAN/CAN-FD消息结构体，用于在channel中传递,它屏蔽了底层 CAN_MSG 和 CANFD_MSG 的差异。
 type UnifiedCANMessage struct {
-	ID   uint32
-	DLC  byte
-	Data [64]byte // 使用64字节以兼容CAN-FD
-	IsFD bool     // 标志位，用于区分是CAN还是CAN-FD消息
+	Direction DirectionType
+	ID        uint32
+	DLC       byte
+	Data      [64]byte // 使用64字节以兼容CAN-FD
+	IsFD      bool     // 标志位，用于区分是CAN还是CAN-FD消息
 }
 
 // CANDriver 定义了CAN/CAN-FD驱动的统一接口

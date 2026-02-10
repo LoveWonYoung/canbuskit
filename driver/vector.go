@@ -531,6 +531,7 @@ func (v *Vector) readOneCanFD() bool {
 	payloadLen := dlcToLen(dlc)
 
 	var unified UnifiedCANMessage
+	unified.Direction = RX
 	unified.ID = msg.CanID & 0x1FFFFFFF
 	unified.DLC = dlc
 	unified.IsFD = msg.MsgFlags&vectorCanFdRxFlagEDL != 0
@@ -579,6 +580,7 @@ func (v *Vector) readOneCAN() bool {
 	payloadLen := dlcToLen(dlc)
 
 	var unified UnifiedCANMessage
+	unified.Direction = RX
 	unified.ID = event.TagData.Msg.ID & 0x1FFFFFFF
 	unified.DLC = dlc
 	unified.IsFD = false

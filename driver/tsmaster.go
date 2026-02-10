@@ -288,9 +288,8 @@ func (t *TSMaster) readLoop() {
 				if actualLen == 0 {
 					continue
 				}
-				unifiedMsg := UnifiedCANMessage{
-					ID: uint32(msg.FIdentifier), DLC: msg.FDLC, Data: msg.FData, IsFD: msg.FFDProperties == 1,
-				}
+
+				var unifiedMsg UnifiedCANMessage
 				// 使用统一的日志函数
 				msgType := t.canType
 				if msg.FFDProperties == 0 {
@@ -300,8 +299,15 @@ func (t *TSMaster) readLoop() {
 				}
 				switch canfdMsg[i].FProperties & 1 {
 				case 0:
+					unifiedMsg = UnifiedCANMessage{
+						Direction: RX, ID: uint32(msg.FIdentifier), DLC: msg.FDLC, Data: msg.FData, IsFD: msg.FFDProperties == 1,
+					}
+
 					logCANMessage("RX", unifiedMsg.ID, unifiedMsg.DLC, unifiedMsg.Data[:dlcToLen(unifiedMsg.DLC)], msgType)
 				case 1:
+					unifiedMsg = UnifiedCANMessage{
+						Direction: TX, ID: uint32(msg.FIdentifier), DLC: msg.FDLC, Data: msg.FData, IsFD: msg.FFDProperties == 1,
+					}
 					logCANMessage("TX", unifiedMsg.ID, unifiedMsg.DLC, unifiedMsg.Data[:dlcToLen(unifiedMsg.DLC)], msgType)
 				}
 

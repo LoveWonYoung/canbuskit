@@ -404,6 +404,7 @@ func (p *PCAN) enqueueMessage(id uint32, dlc byte, data []byte, msgType uint8) {
 	}
 
 	var unified UnifiedCANMessage
+	unified.Direction = RX
 	unified.ID = id
 	unified.DLC = dlc
 	unified.IsFD = isFD
