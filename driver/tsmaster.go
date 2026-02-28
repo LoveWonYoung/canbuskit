@@ -144,15 +144,17 @@ type TSMaster struct {
 	ctx         context.Context
 	cancel      context.CancelFunc
 	canType     CanType
+	CANChannel  byte
 }
 
-func NewTSMaster(cantype CanType) *TSMaster {
+func NewTSMaster(cantype CanType, canChannel byte) *TSMaster {
 	ctx, cancel := context.WithCancel(context.Background())
 	return &TSMaster{
-		rxChan:  make(chan UnifiedCANMessage, RxChannelBufferSize),
-		ctx:     ctx,
-		cancel:  cancel,
-		canType: cantype,
+		rxChan:     make(chan UnifiedCANMessage, RxChannelBufferSize),
+		ctx:        ctx,
+		cancel:     cancel,
+		canType:    cantype,
+		CANChannel: canChannel,
 	}
 }
 
@@ -211,9 +213,11 @@ func (t *TSMaster) Init() error {
 	if findDevice <= 0 {
 		return cleanup(errors.New("no TSMaster devices found"))
 	}
-
+	HardwareName, _ := syscall.BytePtrFromString("Hardware")
+	r, _, _ = t.loader.GetProcAddress("tsapp_show_tsmaster_window").Call(uintptr(unsafe.Pointer(HardwareName)), uintptr(1))
+	fmt.Printf("tsapp_show_tsmaster_window: %d\n", r)
 	// 设置CAN通道数量
-	r, _, _ = t.loader.GetProcAddress("tsapp_set_can_channel_count").Call(uintptr(1))
+	r, _, _ = t.loader.GetProcAddress("tsapp_set_can_channel_count").Call(uintptr(4))
 	fmt.Printf("Set CAN channel count result: %d\n", r)
 	deviceName, _ := syscall.UTF16PtrFromString("TC1016")
 	// 设置映射
@@ -233,7 +237,7 @@ func (t *TSMaster) Init() error {
 	br := float32(500.0)
 	bd := float32(2000.0)
 	r, _, _ = t.loader.GetProcAddress("tsapp_configure_baudrate_canfd").Call(
-		uintptr(0),
+		uintptr(t.CANChannel),
 		uintptr(math.Float32bits(br)),
 		uintptr(math.Float32bits(bd)),
 		uintptr(1),
@@ -277,7 +281,7 @@ func (t *TSMaster) readLoop() {
 			if r, _, _ := t.loader.GetProcAddress("tsfifo_receive_canfd_msgs").Call(
 				uintptr(unsafe.Pointer(&canfdMsg[0])),
 				uintptr(unsafe.Pointer(&size)),
-				uintptr(0),
+				uintptr(t.CANChannel),
 				uintptr(1),
 			); r != 0 {
 				continue
@@ -349,7 +353,7 @@ func (t *TSMaster) Stop() {
 }
 func (t *TSMaster) Write(id int32, data []byte) error {
 	var canfdMsg TLIBCANFD
-	canfdMsg.FIdxChn = 0
+	canfdMsg.FIdxChn = t.CANChannel
 	canfdMsg.FIdentifier = id
 	canfdMsg.FProperties = 1
 	canfdMsg.FDLC = dataLenToDlc(len(data))
