@@ -296,7 +296,7 @@ func (t *TSMaster) readLoop() {
 				var unifiedMsg UnifiedCANMessage
 				// 使用统一的日志函数
 				msgType := t.canType
-				if msg.FFDProperties == 0 {
+				if msg.FFDProperties&1 == 0 {
 					msgType = CAN
 				} else {
 					msgType = CANFD
@@ -304,13 +304,13 @@ func (t *TSMaster) readLoop() {
 				switch canfdMsg[i].FProperties & 1 {
 				case 0:
 					unifiedMsg = UnifiedCANMessage{
-						Direction: RX, ID: uint32(msg.FIdentifier), DLC: msg.FDLC, Data: msg.FData, IsFD: msg.FFDProperties == 1,
+						Direction: RX, ID: uint32(msg.FIdentifier), DLC: msg.FDLC, Data: msg.FData, IsFD: msg.FFDProperties&1 == 1,
 					}
 
 					logCANMessage("RX", unifiedMsg.ID, unifiedMsg.DLC, unifiedMsg.Data[:dlcToLen(unifiedMsg.DLC)], msgType)
 				case 1:
 					unifiedMsg = UnifiedCANMessage{
-						Direction: TX, ID: uint32(msg.FIdentifier), DLC: msg.FDLC, Data: msg.FData, IsFD: msg.FFDProperties == 1,
+						Direction: TX, ID: uint32(msg.FIdentifier), DLC: msg.FDLC, Data: msg.FData, IsFD: msg.FFDProperties&1 == 1,
 					}
 					logCANMessage("TX", unifiedMsg.ID, unifiedMsg.DLC, unifiedMsg.Data[:dlcToLen(unifiedMsg.DLC)], msgType)
 				}
