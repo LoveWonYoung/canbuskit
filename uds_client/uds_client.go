@@ -138,7 +138,6 @@ const (
 )
 
 // hasSubFunctionSuppressPositive 判断该服务是否有首字节子功能，且允许使用 bit7 抑制正响应
-// 按标准常见服务列举，避免误将 DID/参数高字节当作子功能
 func hasSubFunctionSuppressPositive(sid byte) bool {
 	switch sid {
 	case 0x10, 0x11, 0x19, 0x27, 0x28, 0x2F, 0x31, 0x3E, 0x85, 0x86, 0x87:
@@ -247,7 +246,6 @@ type UDSClient struct {
 }
 
 // NewUDSClient 是新的构造函数，负责完成所有组件的初始化和连接。
-// 它接收一个CAN驱动实例和ISOTP配置。
 func NewUDSClient(dev driver.CANDriver, addr *isotp.Address, cfg isotp.Config) (*UDSClient, error) {
 	// 1. 初始化适配器并启动硬件驱动
 	adapter, err := driver.NewAdapter(dev)
@@ -395,11 +393,6 @@ func (c *UDSClient) SendAndRecv(payload []byte, timeout time.Duration) ([]byte, 
 }
 
 // RequestWithContext 发送 UDS 请求并等待响应，支持 Context 取消。
-// 这是更健壮的请求函数，支持：
-//   - Context 取消
-//   - 完整的 NRC 错误处理
-//   - 自动重试机制 (仅对可重试错误)
-//   - 响应 SID 验证
 func (c *UDSClient) RequestWithContext(ctx context.Context, payload []byte, opts RequestOptions) ([]byte, error) {
 	if len(payload) == 0 {
 		return nil, errors.New("请求 payload 不能为空")
