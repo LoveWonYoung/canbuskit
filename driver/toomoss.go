@@ -91,7 +91,8 @@ func archDLLDir() string {
 	if runtime.GOARCH == "386" {
 		return "windows_x86"
 	}
-	return "windows_x64"
+	//return "windows_x64"
+	return ""
 }
 
 func loadDLLs() error {
@@ -121,12 +122,12 @@ func loadDLLs() error {
 	}
 
 	dllDir := archDLLDir()
-	libusbPath := filepath.Join(".\\DLLs", dllDir, "libusb-1.0.dll")
+	libusbPath := filepath.Join(".\\bin", dllDir, "libusb-1.0.dll")
 	if _, err := syscall.LoadLibrary(libusbPath); err != nil {
 		log.Printf("Warning: failed to load libusb-1.0.dll from %s: %v", libusbPath, err)
 	}
 
-	usbPath := filepath.Join(".\\DLLs", dllDir, "USB2XXX.dll")
+	usbPath := filepath.Join(".\\bin", dllDir, "USB2XXX.dll")
 	handle, err := syscall.LoadLibrary(usbPath)
 	if err != nil {
 		return fmt.Errorf("failed to load USB2XXX.dll from %s: %w", usbPath, err)

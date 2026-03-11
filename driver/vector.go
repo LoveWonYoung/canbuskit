@@ -331,7 +331,7 @@ func (v *Vector) loadDLL() error {
 		dllName = vectorDLLName32
 	}
 	candidates := []string{
-		filepath.Join(".", "DLLs", archDLLDir(), dllName),
+		filepath.Join(".", "bin", archDLLDir(), dllName),
 		dllName,
 	}
 	var errs []string

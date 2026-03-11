@@ -36,3 +36,4 @@ main.go
 DLLs*
 log*
 .fleet/
+bin*
