@@ -1,10 +1,8 @@
-package wsbridge
+package driver
 
 import (
 	"encoding/hex"
 	"testing"
-
-	canbusdriver "github.com/LoveWonYoung/canbuskit/driver"
 )
 
 func TestEnvelopeToUnifiedConvertsFDLengthToDLC(t *testing.T) {
@@ -46,7 +44,7 @@ func TestFrameToEnvelopeUsesActualPayloadLength(t *testing.T) {
 		Side:      "right",
 		Channel:   2,
 	}
-	dev := New(canbusdriver.CANFD, cfg)
+	dev := WSBridgeNew(CANFD, cfg)
 
 	env := dev.frameToEnvelope(0x456, make([]byte, 16))
 	if env.Direction != "right_to_left" {
@@ -73,7 +71,7 @@ func TestNormalizeConfigRejectsMissingEndpoint(t *testing.T) {
 }
 
 func TestWriteRejectsClassicCANOverflow(t *testing.T) {
-	dev := New(canbusdriver.CAN, Config{})
+	dev := WSBridgeNew(CAN, Config{})
 	if err := dev.Write(0x123, make([]byte, 9)); err == nil {
 		t.Fatal("expected classic CAN length error")
 	}

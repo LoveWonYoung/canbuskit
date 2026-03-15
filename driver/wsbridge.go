@@ -1,4 +1,4 @@
-package wsbridge
+package driver
 
 import (
 	"context"
@@ -17,7 +17,6 @@ import (
 	"sync"
 	"time"
 
-	canbusdriver "github.com/LoveWonYoung/canbuskit/driver"
 	"github.com/gorilla/websocket"
 )
 
@@ -48,12 +47,12 @@ type Config struct {
 
 type Driver struct {
 	cfg     Config
-	canType canbusdriver.CanType
+	canType CanType
 
 	ctx    context.Context
 	cancel context.CancelFunc
 
-	rxChan chan canbusdriver.UnifiedCANMessage
+	rxChan chan UnifiedCANMessage
 	sendCh chan []byte
 
 	mu          sync.Mutex
@@ -112,7 +111,7 @@ type wsEnvelopeType struct {
 	Type string `json:"type"`
 }
 
-func New(canType canbusdriver.CanType, cfg Config) *Driver {
+func WSBridgeNew(canType CanType, cfg Config) *Driver {
 	return &Driver{
 		cfg:     cfg,
 		canType: canType,
@@ -131,7 +130,7 @@ func (d *Driver) Init() error {
 	}
 
 	d.ctx, d.cancel = context.WithCancel(context.Background())
-	d.rxChan = make(chan canbusdriver.UnifiedCANMessage, canbusdriver.RxChannelBufferSize)
+	d.rxChan = make(chan UnifiedCANMessage, RxChannelBufferSize)
 	d.sendCh = make(chan []byte, d.cfg.sendQueueSize())
 	d.started = false
 	d.stopped = false
@@ -204,11 +203,11 @@ func (d *Driver) Write(id int32, data []byte) error {
 		return errors.New("data length is 0")
 	}
 	switch d.canType {
-	case canbusdriver.CAN:
+	case CAN:
 		if len(data) > 8 {
 			return fmt.Errorf("data length %d exceeds CAN maximum of 8", len(data))
 		}
-	case canbusdriver.CANFD:
+	case CANFD:
 		if len(data) > 64 {
 			return fmt.Errorf("data length %d exceeds CAN-FD maximum of 64", len(data))
 		}
@@ -241,7 +240,7 @@ func (d *Driver) Write(id int32, data []byte) error {
 	}
 }
 
-func (d *Driver) RxChan() <-chan canbusdriver.UnifiedCANMessage {
+func (d *Driver) RxChan() <-chan UnifiedCANMessage {
 	d.mu.Lock()
 	defer d.mu.Unlock()
 	return d.rxChan
@@ -496,7 +495,7 @@ func (d *Driver) monitor(loopErr chan error) {
 	}
 }
 
-func (d *Driver) pushRX(msg canbusdriver.UnifiedCANMessage) {
+func (d *Driver) pushRX(msg UnifiedCANMessage) {
 	d.mu.Lock()
 	rxChan := d.rxChan
 	ctx := d.ctx
@@ -544,7 +543,7 @@ func (d *Driver) frameToEnvelope(id uint32, data []byte) wsCANEnvelope {
 	}
 
 	canType := "CAN"
-	if d.canType == canbusdriver.CANFD {
+	if d.canType == CANFD {
 		canType = "CANFD"
 	}
 
@@ -565,19 +564,19 @@ func (d *Driver) frameToEnvelope(id uint32, data []byte) wsCANEnvelope {
 	}
 }
 
-func envelopeToUnified(env wsCANEnvelope) (canbusdriver.UnifiedCANMessage, error) {
+func envelopeToUnified(env wsCANEnvelope) (UnifiedCANMessage, error) {
 	data, err := hex.DecodeString(env.Frame.DataHex)
 	if err != nil {
-		return canbusdriver.UnifiedCANMessage{}, fmt.Errorf("decode frame payload: %w", err)
+		return UnifiedCANMessage{}, fmt.Errorf("decode frame payload: %w", err)
 	}
 	if len(data) > 64 {
-		return canbusdriver.UnifiedCANMessage{}, fmt.Errorf("frame payload too large: %d", len(data))
+		return UnifiedCANMessage{}, fmt.Errorf("frame payload too large: %d", len(data))
 	}
 
 	var payload [64]byte
 	copy(payload[:], data)
 
-	return canbusdriver.UnifiedCANMessage{
+	return UnifiedCANMessage{
 		ID:   env.Frame.ID,
 		DLC:  dataLenToDLC(len(data)),
 		Data: payload,

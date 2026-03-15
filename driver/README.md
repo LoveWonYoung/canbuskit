@@ -18,18 +18,20 @@ package main
 import (
 	"log"
 
-	canbusdriver "github.com/LoveWonYoung/canbuskit/driver"
-	"github.com/LoveWonYoung/canbuskit/driver/wsbridge"
+	"github.com/LoveWonYoung/canbuskit/driver"
 )
 
 func main() {
-	dev := wsbridge.New(canbusdriver.CANFD, wsbridge.Config{
-		ServerURL: "ws://127.0.0.1:8898/ws",
-		BridgeID:  "demo-bridge",
-		Side:      "left",
-		AuthToken: "your-token",
-		Channel:   0,
-	})
+	dev := driver.WSBridgeNew(
+		driver.CANFD,
+		driver.Config{
+			ServerURL: "ws://127.0.0.1:8898/ws",
+			BridgeID:  "demo-bridge",
+			Side:      "left",
+			AuthToken: "your-token",
+			Channel:   0,
+		},
+	)
 
 	if err := dev.Init(); err != nil {
 		log.Fatal(err)
@@ -41,6 +43,7 @@ func main() {
 		log.Fatal(err)
 	}
 }
+
 ```
 
 ## 注意
