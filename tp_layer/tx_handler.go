@@ -13,6 +13,7 @@ import (
 func (t *Transport) initiateTx(payload []byte, txChan chan<- CanMessage) {
 	t.txBuffer = payload
 	t.txFrameLen = len(payload)
+	maxDataLength := t.maxDataLength()
 
 	// 判断是单帧还是多帧
 	sfPciSize := 1
@@ -20,9 +21,9 @@ func (t *Transport) initiateTx(payload []byte, txChan chan<- CanMessage) {
 		sfPciSize = 2
 	}
 
-	if t.txFrameLen+sfPciSize <= t.MaxDataLength {
+	if t.txFrameLen+sfPciSize <= maxDataLength {
 		// 作为单帧发送
-		data, err := createSingleFramePayload(payload, t.MaxDataLength)
+		data, err := createSingleFramePayload(payload, maxDataLength)
 		if err != nil {
 			t.fireError(fmt.Errorf("Error creating SF: %v", err))
 			t.stopSending()
@@ -45,13 +46,13 @@ func (t *Transport) initiateTx(payload []byte, txChan chan<- CanMessage) {
 		if t.txFrameLen > 4095 {
 			ffPciSize = 6
 		}
-		chunkSize := t.MaxDataLength - ffPciSize
+		chunkSize := maxDataLength - ffPciSize
 
 		// Take first chunk for FF
 		firstChunk := t.txBuffer[:chunkSize]
 		t.txBuffer = t.txBuffer[chunkSize:]
 
-		data, err := createFirstFramePayload(firstChunk, t.txFrameLen, t.MaxDataLength)
+		data, err := createFirstFramePayload(firstChunk, t.txFrameLen, maxDataLength)
 		if err != nil {
 			t.fireError(fmt.Errorf("Error creating FF: %v", err))
 			t.stopSending()
@@ -126,7 +127,7 @@ func (t *Transport) handleTxTransmit(txChan chan<- CanMessage) {
 		return
 	}
 
-	chunkSize := t.MaxDataLength - 1 // CF PCI=1
+	chunkSize := t.maxDataLength() - 1 // CF PCI=1
 	var chunk []byte
 	if len(t.txBuffer) > chunkSize {
 		chunk = t.txBuffer[:chunkSize]

@@ -38,15 +38,6 @@
   - Windows
   - 按 `Toomoss -> TSMaster -> PCAN -> Vector` 顺序自动选择第一个可用设备
 
-### 远程桥接驱动
-
-- `driver/wsbridge`
-  - 通过 WebSocket 对接远端 CAN relay
-  - 对上层暴露标准 `driver.CANDriver`
-  - 适合无本地硬件、跨机诊断或桥接测试环境
-
-`wsbridge` 的详细说明见 [driver/wsbridge/README.md](/Users/lianmin/Documents/GitHub/canbuskit/driver/wsbridge/README.md)。
-
 ## 安装
 
 ```bash
@@ -106,35 +97,6 @@ func main() {
 
 ```go
 dev := driver.NewAutoDriver(driver.CANFD)
-```
-
-如果你不直接连硬件，而是走 WebSocket bridge，可以使用：
-
-```go
-package main
-
-import (
-	"log"
-
-	canbusdriver "github.com/LoveWonYoung/canbuskit/driver"
-	"github.com/LoveWonYoung/canbuskit/driver/wsbridge"
-)
-
-func main() {
-	dev := wsbridge.New(canbusdriver.CANFD, wsbridge.Config{
-		ServerURL: "ws://127.0.0.1:8898/ws",
-		BridgeID:  "demo-bridge",
-		Side:      "left",
-		AuthToken: "your-token",
-		Channel:   0,
-	})
-
-	if err := dev.Init(); err != nil {
-		log.Fatal(err)
-	}
-	dev.Start()
-	defer dev.Stop()
-}
 ```
 
 ## 寻址与 ISO-TP 配置
@@ -282,7 +244,6 @@ if err != nil {
 ## 注意事项
 
 - `driver` 层只提供统一的 `Write(id, data)` 能力，不直接暴露扩展帧、RTR、错误帧等更细的硬件细节。
-- `wsbridge` 为了兼容桥接协议，`dlc` 使用真实字节长度，在库内部会转换为标准 DLC。
 - `services` 只封装了部分常见 UDS 服务；其他服务建议直接用 `UDSClient.Request(...)`。
 - `UDSClient.Close()` 会同时关闭后台 goroutine 和底层设备连接，使用结束后应主动调用。
 
@@ -292,7 +253,7 @@ if err != nil {
 go test ./...
 ```
 
-当前仓库已经包含 `tp_layer`、`uds_client`、`driver/wsbridge` 的测试。
+当前仓库已经包含 `tp_layer`、`uds_client` 的测试。
 
 ## License
 

@@ -17,6 +17,7 @@ import (
 type Transport interface {
 	Send(data []byte)
 	Recv() ([]byte, bool)
+	RecvChan() <-chan []byte
 	SetTxAddress(addr *isotp.Address)
 	SetFDMode(isFD bool)
 	Run(ctx context.Context, rxChan <-chan isotp.CanMessage, txChan chan<- isotp.CanMessage)
@@ -26,8 +27,6 @@ type Transport interface {
 const (
 	adapterRxBufferSize    = 100                     // 适配器接收缓冲区大小
 	adapterTxBufferSize    = 100                     // 适配器发送缓冲区大小
-	goroutineSleep         = 1 * time.Millisecond    // goroutine休眠时间
-	recvPollInterval       = 2 * time.Millisecond    // 接收轮询间隔
 	responsePendingTimeout = 5000 * time.Millisecond // Response Pending 超时
 	defaultMaxRetries      = 3                       // 默认最大重试次数
 )
@@ -236,13 +235,14 @@ func getNRCDescription(nrc byte) string {
 
 // UDSClient 是一个高级客户端，封装了所有初始化和通信的复杂性
 type UDSClient struct {
-	stack    Transport // 使用接口而非具体结构体
-	adapter  *driver.Adapter
-	cancel   context.CancelFunc // 用于控制所有后台goroutine的生命周期
-	ctx      context.Context    // 客户端生命周期 context
-	reqMu    sync.Mutex
-	mode     AddressingMode
-	funcAddr *isotp.Address
+	stack     Transport // 使用接口而非具体结构体
+	adapter   *driver.Adapter
+	cancel    context.CancelFunc // 用于控制所有后台goroutine的生命周期
+	ctx       context.Context    // 客户端生命周期 context
+	txErrChan chan error
+	reqMu     sync.Mutex
+	mode      AddressingMode
+	funcAddr  *isotp.Address
 }
 
 // NewUDSClient 是新的构造函数，负责完成所有组件的初始化和连接。
@@ -263,6 +263,7 @@ func NewUDSClient(dev driver.CANDriver, addr *isotp.Address, cfg isotp.Config) (
 func newUDSClient(adapter *driver.Adapter, stack Transport) *UDSClient {
 	// 3. 创建用于goroutine生命周期管理的context
 	ctx, cancel := context.WithCancel(context.Background())
+	txErrChan := make(chan error, 16)
 
 	// 4. 创建内部通信channels，作为协议栈和适配器之间的桥梁
 	rxFromAdapter := make(chan isotp.CanMessage, adapterRxBufferSize)
@@ -272,15 +273,14 @@ func newUDSClient(adapter *driver.Adapter, stack Transport) *UDSClient {
 	// a. 从适配器接收数据，送入协议栈
 	go func() {
 		for {
+			msg, ok := adapter.RxFuncWithContext(ctx)
+			if !ok {
+				return
+			}
 			select {
 			case <-ctx.Done():
-				return // 接收到退出信号
-			default:
-				if msg, ok := adapter.RxFunc(); ok {
-					rxFromAdapter <- msg
-				} else {
-					time.Sleep(goroutineSleep) // 避免CPU空转
-				}
+				return
+			case rxFromAdapter <- msg:
 			}
 		}
 	}()
@@ -291,8 +291,18 @@ func newUDSClient(adapter *driver.Adapter, stack Transport) *UDSClient {
 			select {
 			case <-ctx.Done():
 				return
-			case msg := <-txToAdapter:
-				adapter.TxFunc(msg)
+			case msg, ok := <-txToAdapter:
+				if !ok {
+					return
+				}
+				if err := adapter.TxFunc(msg); err != nil {
+					select {
+					case <-ctx.Done():
+						return
+					case txErrChan <- err:
+					default:
+					}
+				}
 			}
 		}
 	}()
@@ -322,11 +332,12 @@ func newUDSClient(adapter *driver.Adapter, stack Transport) *UDSClient {
 
 	log.Println("UDS客户端已成功初始化并启动。")
 	return &UDSClient{
-		stack:   stack,
-		adapter: adapter,
-		cancel:  cancel,
-		ctx:     ctx,
-		mode:    AddressPhysical,
+		stack:     stack,
+		adapter:   adapter,
+		cancel:    cancel,
+		ctx:       ctx,
+		txErrChan: txErrChan,
+		mode:      AddressPhysical,
 	}
 }
 
@@ -466,13 +477,14 @@ func (c *UDSClient) RequestWithContext(ctx context.Context, payload []byte, opts
 
 // singleRequest 执行单次请求（不含重试逻辑）
 func (c *UDSClient) singleRequest(ctx context.Context, payload []byte, timeout time.Duration, suppressPositive bool) ([]byte, error) {
-	// 发送前清空可能存在的旧响应
-	for {
-		if _, ok := c.stack.Recv(); !ok {
-			break
-		}
+	if timeout <= 0 {
+		return nil, errors.New("请求超时必须大于 0")
 	}
 
+	c.drainStackRecv()
+	c.drainTxErrors()
+
+	// 发送前清空可能存在的旧响应
 	c.stack.Send(payload) // 将数据包放入发送队列
 
 	deadline := time.NewTimer(timeout)
@@ -484,48 +496,77 @@ func (c *UDSClient) singleRequest(ctx context.Context, payload []byte, timeout t
 		clientDone = c.ctx.Done()
 	}
 
+	recvCh := c.stack.RecvChan()
+	txErrCh := c.txErrChan
+
 	for {
 		select {
 		case <-ctx.Done():
 			return nil, ctx.Err()
 		case <-clientDone:
 			return nil, errors.New("UDS 客户端已关闭")
+		case err := <-txErrCh:
+			return nil, err
 		case <-deadline.C:
 			if suppressPositive {
 				return nil, nil // 抑制正响应：超时视为成功完成
 			}
 			return nil, fmt.Errorf("等待响应超时 (%v)", timeout)
-		default:
-			if data, ok := c.stack.Recv(); ok {
-				// 检查是否为负响应
-				if len(data) >= 3 && data[0] == 0x7F {
-					nrc := data[2]
-					serviceSID := data[1]
-
-					// Response Pending - 重置超时继续等待
-					if nrc == RequestCorrectlyReceived_ResponsePending {
-						if !deadline.Stop() {
-							select {
-							case <-deadline.C:
-							default:
-							}
-						}
-						deadline.Reset(responsePendingTimeout)
-						// log.Printf("收到 Response Pending (SID=%02X)，继续等待...", serviceSID)
-						// fmt.Printf("Response Pending (SID=%02X Resp=% 02X) ，继续等待...\n", serviceSID, data)
-						continue
-					}
-
-					// 其他负响应
-					return data, &UDSError{
-						ServiceID: serviceSID,
-						NRC:       nrc,
-						Message:   getNRCDescription(nrc),
-					}
-				}
-				return data, nil
+		case data, ok := <-recvCh:
+			if !ok {
+				return nil, errors.New("transport receive channel closed")
 			}
-			time.Sleep(recvPollInterval) // 短暂等待，避免抢占CPU
+			// 检查是否为负响应
+			if len(data) >= 3 && data[0] == 0x7F {
+				nrc := data[2]
+				serviceSID := data[1]
+
+				// Response Pending - 重置超时继续等待
+				if nrc == RequestCorrectlyReceived_ResponsePending {
+					if !deadline.Stop() {
+						select {
+						case <-deadline.C:
+						default:
+						}
+					}
+					deadline.Reset(responsePendingTimeout)
+					continue
+				}
+
+				// 其他负响应
+				return data, &UDSError{
+					ServiceID: serviceSID,
+					NRC:       nrc,
+					Message:   getNRCDescription(nrc),
+				}
+			}
+			return data, nil
+		}
+	}
+}
+
+func (c *UDSClient) drainStackRecv() {
+	for {
+		select {
+		case _, ok := <-c.stack.RecvChan():
+			if !ok {
+				return
+			}
+		default:
+			return
+		}
+	}
+}
+
+func (c *UDSClient) drainTxErrors() {
+	if c.txErrChan == nil {
+		return
+	}
+	for {
+		select {
+		case <-c.txErrChan:
+		default:
+			return
 		}
 	}
 }

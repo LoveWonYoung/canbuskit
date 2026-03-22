@@ -92,12 +92,14 @@ func (m *MockCANDriver) GetWriteLog() [][]byte {
 type MockTransport struct {
 	mu        sync.Mutex
 	sendQueue [][]byte
-	recvQueue [][]byte
+	recvCh    chan []byte
 	fdMode    bool
 }
 
 func NewMockTransport() *MockTransport {
-	return &MockTransport{}
+	return &MockTransport{
+		recvCh: make(chan []byte, 100),
+	}
 }
 
 func (t *MockTransport) Send(data []byte) {
@@ -107,15 +109,18 @@ func (t *MockTransport) Send(data []byte) {
 }
 
 func (t *MockTransport) Recv() ([]byte, bool) {
-	t.mu.Lock()
-	defer t.mu.Unlock()
-	if len(t.recvQueue) == 0 {
+	select {
+	case data, ok := <-t.recvCh:
+		if !ok {
+			return nil, false
+		}
+		return data, true
+	default:
 		return nil, false
 	}
-	data := t.recvQueue[0]
-	t.recvQueue = t.recvQueue[1:]
-	return data, true
 }
+
+func (t *MockTransport) RecvChan() <-chan []byte { return t.recvCh }
 
 func (t *MockTransport) SetFDMode(isFD bool) {
 	t.mu.Lock()
@@ -134,9 +139,7 @@ func (t *MockTransport) Run(ctx context.Context, rxChan <-chan isotp.CanMessage,
 }
 
 func (t *MockTransport) PushResponse(data []byte) {
-	t.mu.Lock()
-	defer t.mu.Unlock()
-	t.recvQueue = append(t.recvQueue, append([]byte{}, data...))
+	t.recvCh <- append([]byte{}, data...)
 }
 
 // ============================================================================

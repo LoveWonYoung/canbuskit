@@ -137,9 +137,8 @@ func (a *Address) IsForMe(msg *CanMessage) bool {
 		}
 		return msg.Data[0] == a.AddressExtension
 	default:
-		panic("unhandled default case")
+		return false
 	}
-	return false
 }
 
 // Is29Bit 返回当前模式是否为29位

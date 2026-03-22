@@ -1,6 +1,7 @@
 package driver
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"log"
@@ -40,37 +41,53 @@ func (t *Adapter) Close() {
 }
 
 // TxFunc is send function
-func (t *Adapter) TxFunc(msg tp_layer.CanMessage) {
+func (t *Adapter) TxFunc(msg tp_layer.CanMessage) error {
 	err := t.driver.Write(int32(msg.ArbitrationID), msg.Data)
 	if err != nil {
-		log.Printf("ERROR: Adapter failed to send message: %v", err)
+		wrappedErr := fmt.Errorf("adapter failed to send message (id=0x%X): %w", msg.ArbitrationID, err)
+		log.Printf("ERROR: %v", wrappedErr)
+		return wrappedErr
 	}
+	return nil
 }
 
 // RxFunc is receive function
 func (t *Adapter) RxFunc() (tp_layer.CanMessage, bool) {
 	select {
 	case receivedMsg, ok := <-t.rxChan:
-		if !ok {
-			return tp_layer.CanMessage{}, false
-		}
-		payloadLength := dlcToLen(receivedMsg.DLC)
-		if payloadLength > len(receivedMsg.Data) {
-			log.Printf("警告: 收到的报文DLC (%d) 大于数据数组长度 (%d)。ID: 0x%X", receivedMsg.DLC, len(receivedMsg.Data), receivedMsg.ID)
-			payloadLength = len(receivedMsg.Data) // 使用数组实际长度作为安全保障
-		}
-
-		isotpMsg := tp_layer.CanMessage{
-			ArbitrationID: receivedMsg.ID,
-			Data:          receivedMsg.Data[:payloadLength],
-			IsExtendedID:  false,
-			IsFD:          receivedMsg.IsFD,
-			BitrateSwitch: false,
-		}
-
-		return isotpMsg, true
-
+		return t.convertRXMessage(receivedMsg, ok)
 	default:
 		return tp_layer.CanMessage{}, false
 	}
+}
+
+// RxFuncWithContext blocks until a frame arrives or context is canceled.
+func (t *Adapter) RxFuncWithContext(ctx context.Context) (tp_layer.CanMessage, bool) {
+	select {
+	case <-ctx.Done():
+		return tp_layer.CanMessage{}, false
+	case receivedMsg, ok := <-t.rxChan:
+		return t.convertRXMessage(receivedMsg, ok)
+	}
+}
+
+func (t *Adapter) convertRXMessage(receivedMsg UnifiedCANMessage, ok bool) (tp_layer.CanMessage, bool) {
+	if !ok {
+		return tp_layer.CanMessage{}, false
+	}
+	payloadLength := dlcToLen(receivedMsg.DLC)
+	if payloadLength > len(receivedMsg.Data) {
+		log.Printf("警告: 收到的报文DLC (%d) 大于数据数组长度 (%d)。ID: 0x%X", receivedMsg.DLC, len(receivedMsg.Data), receivedMsg.ID)
+		payloadLength = len(receivedMsg.Data) // 使用数组实际长度作为安全保障
+	}
+
+	isotpMsg := tp_layer.CanMessage{
+		ArbitrationID: receivedMsg.ID,
+		Data:          receivedMsg.Data[:payloadLength],
+		IsExtendedID:  false,
+		IsFD:          receivedMsg.IsFD,
+		BitrateSwitch: false,
+	}
+
+	return isotpMsg, true
 }

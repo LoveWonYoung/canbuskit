@@ -2,8 +2,8 @@ package tp_layer
 
 import (
 	"context"
-	"errors"
 	"fmt"
+	"sync"
 	"time"
 )
 
@@ -13,6 +13,7 @@ type Transport struct {
 	txAddress     *Address
 	IsFD          bool
 	MaxDataLength int
+	mu            sync.RWMutex
 	rxState       State
 	txState       State
 	rxBuffer      []byte
@@ -74,10 +75,14 @@ func NewTransport(address *Address, cfg Config) *Transport {
 // SetTxAddress allows switching the transmit address without affecting RX filtering.
 // When nil, the transport uses the base address provided at construction time.
 func (t *Transport) SetTxAddress(addr *Address) {
+	t.mu.Lock()
+	defer t.mu.Unlock()
 	t.txAddress = addr
 }
 
 func (t *Transport) SetFDMode(isFD bool) {
+	t.mu.Lock()
+	defer t.mu.Unlock()
 	t.IsFD = isFD
 	if isFD {
 		t.MaxDataLength = 64
@@ -94,11 +99,19 @@ func (t *Transport) Send(data []byte) {
 // Recv receives data. It matches the old signature but now pulls from channel.
 func (t *Transport) Recv() ([]byte, bool) {
 	select {
-	case data := <-t.rxDataChan:
+	case data, ok := <-t.rxDataChan:
+		if !ok {
+			return nil, false
+		}
 		return data, true
 	default:
 		return nil, false
 	}
+}
+
+// RecvChan returns a receive-only channel for blocking reads by callers.
+func (t *Transport) RecvChan() <-chan []byte {
+	return t.rxDataChan
 }
 
 // Run starts the protocol stack event loop.
@@ -106,17 +119,24 @@ func (t *Transport) Run(ctx context.Context, rxChan <-chan CanMessage, txChan ch
 	defer t.cleanup()
 
 	for {
+		var txDataEnable <-chan []byte
+		if t.txState == StateIdle {
+			txDataEnable = t.txDataChan
+		}
+
 		select {
 		case <-ctx.Done():
 			return
-		case msg := <-rxChan:
-			t.ProcessRx(msg, txChan)
-		case data := <-t.txDataChan:
-			if t.txState == StateIdle {
-				t.startTransmission(data, txChan)
-			} else {
-				t.fireError(errors.New("Error: Concurrent underlying send (logic error in select handling)"))
+		case msg, ok := <-rxChan:
+			if !ok {
+				return
 			}
+			t.ProcessRx(msg, txChan)
+		case data, ok := <-txDataEnable:
+			if !ok {
+				return
+			}
+			t.startTransmission(data, txChan)
 		case <-t.timerRxCF.C:
 			fmt.Println("接收连续帧超时，重置接收状态。")
 			t.stopReceiving()
@@ -124,6 +144,9 @@ func (t *Transport) Run(ctx context.Context, rxChan <-chan CanMessage, txChan ch
 			fmt.Println("等待流控帧超时，停止发送。")
 			t.stopSending()
 		case <-t.timerTxSTmin.C:
+			if t.txState != StateTransmit {
+				continue
+			}
 			t.handleTxTransmit(txChan)
 		}
 	}
@@ -143,10 +166,16 @@ func (t *Transport) RunEventLoop(ctx context.Context, rxChan <-chan CanMessage, 
 		case <-ctx.Done():
 			return
 
-		case msg := <-rxChan:
+		case msg, ok := <-rxChan:
+			if !ok {
+				return
+			}
 			t.ProcessRx(msg, txChan)
 
-		case data := <-txDataEnable:
+		case data, ok := <-txDataEnable:
+			if !ok {
+				return
+			}
 			t.startTransmission(data, txChan)
 
 		case <-t.timerRxCF.C:
@@ -211,21 +240,30 @@ func (t *Transport) stopSending() {
 }
 
 func (t *Transport) makeTxMsg(data []byte, addrType AddressType) CanMessage {
+	t.mu.RLock()
 	addr := t.txAddress
 	if addr == nil {
 		addr = t.address
 	}
+	t.mu.RUnlock()
 	return t.makeTxMsgWithAddr(addr, data, addrType)
 }
 
 func (t *Transport) makeTxMsgWithAddr(addr *Address, data []byte, addrType AddressType) CanMessage {
+	t.mu.RLock()
+	isFD := t.IsFD
+	t.mu.RUnlock()
+
 	arbitrationID := addr.GetTxArbitrationID(addrType)
-	fullPayload := append(addr.TxPayloadPrefix, data...)
+	prefixLen := len(addr.TxPayloadPrefix)
+	fullPayload := make([]byte, prefixLen+len(data))
+	copy(fullPayload, addr.TxPayloadPrefix)
+	copy(fullPayload[prefixLen:], data)
 
 	// Padding
 	if t.config.PaddingByte != nil {
 		targetLen := 8
-		if t.IsFD {
+		if isFD {
 			targetLen = nextFDTargetLength(len(fullPayload))
 		}
 
@@ -242,8 +280,14 @@ func (t *Transport) makeTxMsgWithAddr(addr *Address, data []byte, addrType Addre
 		ArbitrationID: arbitrationID,
 		Data:          fullPayload,
 		IsExtendedID:  addr.Is29Bit(),
-		IsFD:          t.IsFD,
+		IsFD:          isFD,
 	}
+}
+
+func (t *Transport) maxDataLength() int {
+	t.mu.RLock()
+	defer t.mu.RUnlock()
+	return t.MaxDataLength
 }
 
 // nextFDTargetLength returns the smallest CAN FD data length that is >= length.
