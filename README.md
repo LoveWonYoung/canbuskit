@@ -243,7 +243,7 @@ if err != nil {
 
 ## 注意事项
 
-- `driver` 层只提供统一的 `Write(id, data)` 能力，不直接暴露扩展帧、RTR、错误帧等更细的硬件细节。
+- `driver` 层只提供统一的 `Write(id, fd, data)` 能力，通过 `fd` 标志在同一函数里发送 CAN / CAN-FD。
 - `services` 只封装了部分常见 UDS 服务；其他服务建议直接用 `UDSClient.Request(...)`。
 - `UDSClient.Close()` 会同时关闭后台 goroutine 和底层设备连接，使用结束后应主动调用。
 

@@ -48,7 +48,7 @@ func (m *MockCANDriver) Stop()                                   { m.cancel() }
 func (m *MockCANDriver) Context() context.Context                { return m.ctx }
 func (m *MockCANDriver) RxChan() <-chan driver.UnifiedCANMessage { return m.rxChan }
 
-func (m *MockCANDriver) Write(id int32, data []byte) error {
+func (m *MockCANDriver) Write(id int32, fd bool, data []byte) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	// 记录写入的数据
@@ -370,7 +370,7 @@ func TestMockCANDriver(t *testing.T) {
 	)
 
 	// 写入数据
-	err := driver.Write(0x747, []byte{0x22, 0xF1, 0x90})
+	err := driver.Write(0x747, false, []byte{0x22, 0xF1, 0x90})
 	if err != nil {
 		t.Fatalf("写入失败: %v", err)
 	}

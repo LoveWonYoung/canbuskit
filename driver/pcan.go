@@ -147,19 +147,21 @@ func (p *PCAN) Stop() {
 	}
 }
 
-func (p *PCAN) Write(id int32, data []byte) error {
+func (p *PCAN) Write(id int32, fd bool, data []byte) error {
 	if len(data) == 0 {
 		return errors.New("data length is 0")
 	}
-	if p.canType == CAN && len(data) > 8 {
+	if !fd && len(data) > 8 {
 		return fmt.Errorf("data length %d exceeds CAN maximum of 8", len(data))
 	}
-	if p.canType == CANFD && len(data) > 64 {
+	if fd && len(data) > 64 {
 		return fmt.Errorf("data length %d exceeds CAN-FD maximum of 64", len(data))
 	}
 
-	switch p.canType {
-	case CANFD:
+	if fd {
+		if p.canType != CANFD {
+			return errors.New("PCAN is not initialized in CAN-FD mode")
+		}
 		var msg pcanMsgFD
 		msg.ID = uint32(id)
 		msg.MsgType = pcanMessageFD | pcanMessageBRS
@@ -170,6 +172,21 @@ func (p *PCAN) Write(id int32, data []byte) error {
 			return fmt.Errorf("pcan write fd failed: %s", p.formatStatus(status))
 		}
 		logCANMessage("TX", msg.ID, msg.DLC, msg.Data[:dlcToLen(msg.DLC)], CANFD)
+		return nil
+	}
+
+	switch p.canType {
+	case CANFD:
+		var msg pcanMsgFD
+		msg.ID = uint32(id)
+		msg.MsgType = pcanMessageStandard
+		msg.DLC = dataLenToDlc(len(data))
+		copy(msg.Data[:], data)
+		status := p.callWriteFD(&msg)
+		if status != pcanErrorOK {
+			return fmt.Errorf("pcan write failed: %s", p.formatStatus(status))
+		}
+		logCANMessage("TX", msg.ID, msg.DLC, msg.Data[:len(data)], CAN)
 		return nil
 	case CAN:
 		var msg pcanMsg

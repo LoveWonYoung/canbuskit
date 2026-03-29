@@ -252,19 +252,21 @@ func (v *Vector) Stop() {
 	v.portHandle = vectorInvalidPortHandle
 }
 
-func (v *Vector) Write(id int32, data []byte) error {
+func (v *Vector) Write(id int32, fd bool, data []byte) error {
 	if len(data) == 0 {
 		return errors.New("data length is 0")
 	}
-	if v.canType == CAN && len(data) > 8 {
+	if !fd && len(data) > 8 {
 		return fmt.Errorf("data length %d exceeds CAN maximum of 8", len(data))
 	}
-	if v.canType == CANFD && len(data) > 64 {
+	if fd && len(data) > 64 {
 		return fmt.Errorf("data length %d exceeds CAN-FD maximum of 64", len(data))
 	}
 
-	switch v.canType {
-	case CANFD:
+	if fd {
+		if v.canType != CANFD {
+			return errors.New("Vector is not initialized in CAN-FD mode")
+		}
 		var txEvent xlCanTxEvent
 		txEvent.Tag = vectorCanFdTxTag
 		txEvent.TransID = 0xFFFF
@@ -287,6 +289,32 @@ func (v *Vector) Write(id int32, data []byte) error {
 			return fmt.Errorf("xlCanTransmitEx failed: %s", v.errorString(int16(status)))
 		}
 		logCANMessage("TX", uint32(id), txEvent.TagData.CanMsg.DLC, txEvent.TagData.CanMsg.Data[:dlcToLen(txEvent.TagData.CanMsg.DLC)], CANFD)
+		return nil
+	}
+
+	switch v.canType {
+	case CANFD:
+		var txEvent xlCanTxEvent
+		txEvent.Tag = vectorCanFdTxTag
+		txEvent.TransID = 0xFFFF
+		txEvent.TagData.CanMsg.CanID = uint32(id)
+		txEvent.TagData.CanMsg.MsgFlags = 0
+		txEvent.TagData.CanMsg.DLC = dataLenToDlc(len(data))
+		copy(txEvent.TagData.CanMsg.Data[:], data)
+
+		msgCount := uint32(1)
+		msgSent := uint32(0)
+		status, _, _ := v.canTransmitExProc.Call(
+			uintptr(v.portHandle),
+			uintptr(v.channelMask),
+			uintptr(msgCount),
+			uintptr(unsafe.Pointer(&msgSent)),
+			uintptr(unsafe.Pointer(&txEvent)),
+		)
+		if int32(status) != vectorStatusSuccess {
+			return fmt.Errorf("xlCanTransmitEx failed: %s", v.errorString(int16(status)))
+		}
+		logCANMessage("TX", uint32(id), txEvent.TagData.CanMsg.DLC, txEvent.TagData.CanMsg.Data[:len(data)], CAN)
 		return nil
 	case CAN:
 		var event xlEvent

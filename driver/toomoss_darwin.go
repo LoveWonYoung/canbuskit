@@ -477,24 +477,24 @@ func (c *Toomoss) drainInitialBuffer() {
 	}
 }
 
-func (c *Toomoss) Write(id int32, data []byte) error {
+func (c *Toomoss) Write(id int32, fd bool, data []byte) error {
 	if len(data) == 0 {
 		return fmt.Errorf("数据长度 %d", len(data))
 	}
-	if len(data) > 64 && c.canType == CANFD {
+	if fd && len(data) > 64 {
 		return fmt.Errorf("数据长度 %d 超过CAN-FD最大长度64", len(data))
 	}
-	if len(data) > 8 && c.canType == CAN {
+	if !fd && len(data) > 8 {
 		return fmt.Errorf("数据长度 %d 超过CAN最大长度8", len(data))
 	}
 
 	var msg C.CANFD_MSG
 	msg.ID = C.uint32_t(id)
 	msg.DLC = C.uint8_t(len(data))
-	switch c.canType {
-	case CAN:
+	switch {
+	case !fd:
 		msg.Flags = C.uint8_t(CAN_MSG_FLAG_STD)
-	case CANFD:
+	case fd:
 		msg.Flags = C.uint8_t(CANFD_MSG_FLAG_FDF)
 	default:
 		msg.Flags = C.uint8_t(CANFD_MSG_FLAG_FDF)
@@ -511,6 +511,11 @@ func (c *Toomoss) Write(id int32, data []byte) error {
 	))
 
 	if sendRet == 1 {
+		logType := CAN
+		if fd {
+			logType = CANFD
+		}
+
 		var payload [64]byte
 		copy(payload[:], data)
 
@@ -522,7 +527,7 @@ func (c *Toomoss) Write(id int32, data []byte) error {
 			IsFD:      byte(msg.Flags)&CANFD_MSG_FLAG_FDF != 0,
 		}
 
-		logCANMessage("TX", uint32(id), byte(msg.DLC), payload[:len(data)], c.canType)
+		logCANMessage("TX", uint32(id), byte(msg.DLC), payload[:len(data)], logType)
 		select {
 		case c.rxChan <- unifiedMsg:
 		default:
