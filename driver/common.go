@@ -86,7 +86,7 @@ type CANDriver interface {
 	Init() error
 	Start()
 	Stop()
-	Write(id int32, data []byte) error
+	Write(id int32, fd bool, data []byte) error
 	RxChan() <-chan UnifiedCANMessage
 	Context() context.Context
 }

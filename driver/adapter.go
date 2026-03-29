@@ -42,7 +42,7 @@ func (t *Adapter) Close() {
 
 // TxFunc is send function
 func (t *Adapter) TxFunc(msg tp_layer.CanMessage) error {
-	err := t.driver.Write(int32(msg.ArbitrationID), msg.Data)
+	err := t.driver.Write(int32(msg.ArbitrationID), msg.IsFD, msg.Data)
 	if err != nil {
 		wrappedErr := fmt.Errorf("adapter failed to send message (id=0x%X): %w", msg.ArbitrationID, err)
 		log.Printf("ERROR: %v", wrappedErr)

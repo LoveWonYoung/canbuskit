@@ -70,9 +70,9 @@ func (a *AutoDriver) Stop() {
 	}
 }
 
-func (a *AutoDriver) Write(id int32, data []byte) error {
+func (a *AutoDriver) Write(id int32, fd bool, data []byte) error {
 	if drv := a.getDriver(); drv != nil {
-		return drv.Write(id, data)
+		return drv.Write(id, fd, data)
 	}
 	return errors.New("driver not initialized")
 }

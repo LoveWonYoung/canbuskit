@@ -351,13 +351,27 @@ func (t *TSMaster) Stop() {
 
 	fmt.Println("TSMaster stopped")
 }
-func (t *TSMaster) Write(id int32, data []byte) error {
+func (t *TSMaster) Write(id int32, fd bool, data []byte) error {
+	if len(data) == 0 {
+		return errors.New("data length is 0")
+	}
+	if !fd && len(data) > 8 {
+		return fmt.Errorf("data length %d exceeds CAN maximum of 8", len(data))
+	}
+	if fd && len(data) > 64 {
+		return fmt.Errorf("data length %d exceeds CAN-FD maximum of 64", len(data))
+	}
+
 	var canfdMsg TLIBCANFD
 	canfdMsg.FIdxChn = t.CANChannel
 	canfdMsg.FIdentifier = id
 	canfdMsg.FProperties = 1
 	canfdMsg.FDLC = dataLenToDlc(len(data))
-	canfdMsg.FFDProperties = uint8(t.canType)
+	if fd {
+		canfdMsg.FFDProperties = uint8(CANFD)
+	} else {
+		canfdMsg.FFDProperties = uint8(CAN)
+	}
 	// 复制数据到CAN消息
 	maxLen := dlcToLen(canfdMsg.FDLC)
 	for i := 0; i < maxLen && i < len(data); i++ {
