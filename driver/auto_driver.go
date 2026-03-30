@@ -91,6 +91,15 @@ func (a *AutoDriver) Context() context.Context {
 	return context.Background()
 }
 
+func (a *AutoDriver) IsFDMode() bool {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	if provider, ok := a.driver.(FDModeProvider); ok {
+		return provider.IsFDMode()
+	}
+	return a.canType == CANFD
+}
+
 func (a *AutoDriver) getDriver() CANDriver {
 	a.mu.Lock()
 	defer a.mu.Unlock()

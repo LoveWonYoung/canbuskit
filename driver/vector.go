@@ -663,3 +663,7 @@ func (v *Vector) cleanup(err error) error {
 	v.Stop()
 	return err
 }
+
+func (v *Vector) IsFDMode() bool {
+	return v.canType == CANFD
+}

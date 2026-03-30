@@ -21,6 +21,7 @@ type MockCANDriver struct {
 	rxChan    chan driver.UnifiedCANMessage
 	ctx       context.Context
 	cancel    context.CancelFunc
+	fdMode    bool
 	writeLog  [][]byte       // 记录所有写入的数据
 	responses []MockResponse // 预设的响应
 	respIndex int
@@ -47,6 +48,7 @@ func (m *MockCANDriver) Start()                                  {}
 func (m *MockCANDriver) Stop()                                   { m.cancel() }
 func (m *MockCANDriver) Context() context.Context                { return m.ctx }
 func (m *MockCANDriver) RxChan() <-chan driver.UnifiedCANMessage { return m.rxChan }
+func (m *MockCANDriver) IsFDMode() bool                          { return m.fdMode }
 
 func (m *MockCANDriver) Write(id int32, fd bool, data []byte) error {
 	m.mu.Lock()
@@ -389,6 +391,37 @@ func TestMockCANDriver(t *testing.T) {
 		}
 	case <-time.After(100 * time.Millisecond):
 		t.Error("等待响应超时")
+	}
+}
+
+func TestNewUDSClient_AutoSyncFDMode(t *testing.T) {
+	mockDriver := NewMockCANDriver()
+	mockDriver.fdMode = true
+
+	addr, err := isotp.NewAddress(
+		isotp.Normal11Bit,
+		isotp.WithTxID(0x700),
+		isotp.WithRxID(0x708),
+	)
+	if err != nil {
+		t.Fatalf("create address failed: %v", err)
+	}
+
+	client, err := NewUDSClient(mockDriver, addr, isotp.DefaultConfig())
+	if err != nil {
+		t.Fatalf("new uds client failed: %v", err)
+	}
+	defer client.Close()
+
+	stack, ok := client.stack.(*isotp.Transport)
+	if !ok {
+		t.Fatalf("unexpected stack type: %T", client.stack)
+	}
+	if !stack.IsFD {
+		t.Fatalf("expected stack fd mode to be true")
+	}
+	if stack.MaxDataLength != 64 {
+		t.Fatalf("expected max data length 64, got %d", stack.MaxDataLength)
 	}
 }
 

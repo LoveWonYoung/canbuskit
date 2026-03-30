@@ -255,6 +255,9 @@ func NewUDSClient(dev driver.CANDriver, addr *isotp.Address, cfg isotp.Config) (
 
 	// 2. 初始化ISOTP协议栈
 	stack := isotp.NewTransport(addr, cfg)
+	if isFD, ok := driver.DetectFDMode(dev); ok {
+		stack.SetFDMode(isFD)
+	}
 
 	return newUDSClient(adapter, stack), nil
 }

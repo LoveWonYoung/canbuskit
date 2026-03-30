@@ -717,3 +717,7 @@ func (c *Toomoss) RxChan() <-chan UnifiedCANMessage {
 }
 
 func (c *Toomoss) Context() context.Context { return c.ctx }
+
+func (c *Toomoss) IsFDMode() bool {
+	return c.canType == CANFD
+}

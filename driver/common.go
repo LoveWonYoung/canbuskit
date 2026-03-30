@@ -90,3 +90,19 @@ type CANDriver interface {
 	RxChan() <-chan UnifiedCANMessage
 	Context() context.Context
 }
+
+// FDModeProvider is an optional capability implemented by drivers that can
+// expose their configured CAN/CAN-FD mode.
+type FDModeProvider interface {
+	IsFDMode() bool
+}
+
+// DetectFDMode returns whether the provided driver reports FD mode and whether
+// the capability is available.
+func DetectFDMode(dev CANDriver) (isFD bool, ok bool) {
+	provider, ok := dev.(FDModeProvider)
+	if !ok {
+		return false, false
+	}
+	return provider.IsFDMode(), true
+}

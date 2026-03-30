@@ -394,3 +394,7 @@ func (t *TSMaster) Context() context.Context {
 	}
 	return context.Background()
 }
+
+func (t *TSMaster) IsFDMode() bool {
+	return t.canType == CANFD
+}

@@ -511,3 +511,7 @@ func pcanUSBHandle(channel int) (uint16, error) {
 	}
 	return uint16(pcanUSBBaseHigh + channel + 1), nil
 }
+
+func (p *PCAN) IsFDMode() bool {
+	return p.canType == CANFD
+}
