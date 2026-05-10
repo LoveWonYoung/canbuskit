@@ -424,11 +424,15 @@ func (c *Toomoss) readLoop() {
 
 			for i := 0; i < getCanFDMsgNum; i++ {
 				msg := canFDMsg[i]
-				dlc := byte(msg.DLC)
-				actualLen := dlcToLen(dlc)
+				actualLen := int(msg.DLC)
 				if actualLen == 0 {
 					continue
 				}
+				if actualLen > len(msg.Data) {
+					log.Printf("警告: Toomoss返回的数据长度 (%d) 大于数据数组长度 (%d)。ID: 0x%X", actualLen, len(msg.Data), uint32(msg.ID))
+					actualLen = len(msg.Data)
+				}
+				dlc := dataLenToDlc(actualLen)
 
 				var payload [64]byte
 				for j := 0; j < actualLen && j < len(payload); j++ {
@@ -450,7 +454,7 @@ func (c *Toomoss) readLoop() {
 				} else {
 					msgType = CANFD
 				}
-				logCANMessage("RX", unifiedMsg.ID, dataLenToDlc(int(unifiedMsg.DLC)), unifiedMsg.Data[:unifiedMsg.DLC], msgType)
+				logCANMessage("RX", unifiedMsg.ID, unifiedMsg.DLC, unifiedMsg.Data[:actualLen], msgType)
 
 				select {
 				case c.rxChan <- unifiedMsg:
@@ -522,12 +526,12 @@ func (c *Toomoss) Write(id int32, fd bool, data []byte) error {
 		unifiedMsg := UnifiedCANMessage{
 			Direction: TX,
 			ID:        uint32(msg.ID),
-			DLC:       byte(msg.DLC),
+			DLC:       dataLenToDlc(len(data)),
 			Data:      payload,
 			IsFD:      byte(msg.Flags)&CANFD_MSG_FLAG_FDF != 0,
 		}
 
-		logCANMessage("TX", uint32(id), byte(msg.DLC), payload[:len(data)], logType)
+		logCANMessage("TX", uint32(id), unifiedMsg.DLC, payload[:len(data)], logType)
 		select {
 		case c.rxChan <- unifiedMsg:
 		default:
