@@ -26,7 +26,7 @@ type Transport interface {
 // 通道缓冲区大小常量
 const (
 	adapterRxBufferSize    = 100                     // 适配器接收缓冲区大小
-	adapterTxBufferSize    = 100                     // 适配器发送缓冲区大小
+	adapterTxBufferSize    = 1024                    // 适配器发送缓冲区（大块 0x36 + STmin=0 时 CF 突发，适当加大）
 	responsePendingTimeout = 5000 * time.Millisecond // Response Pending 超时
 	defaultMaxRetries      = 3                       // 默认最大重试次数
 )

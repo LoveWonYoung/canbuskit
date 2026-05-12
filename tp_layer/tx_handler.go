@@ -31,12 +31,8 @@ func (t *Transport) initiateTx(payload []byte, txChan chan<- CanMessage) {
 		}
 
 		msg := t.makeTxMsg(data, Physical)
-		select {
-		case txChan <- msg:
-			// Sent successfully
-		default:
-			t.fireError(errors.New("Tx Channel full, dropping SF"))
-		}
+		// 阻塞发送：对端 STmin=0 时会高速产生 CF，非阻塞入队在 TX 消费略慢时会丢帧并破坏多帧语义。
+		txChan <- msg
 		// Done
 		t.stopSending() // Resets state to Idle
 
@@ -63,13 +59,7 @@ func (t *Transport) initiateTx(payload []byte, txChan chan<- CanMessage) {
 		t.txState = StateWaitFC
 
 		msg := t.makeTxMsg(data, Physical)
-		select {
-		case txChan <- msg:
-		default:
-			t.fireError(errors.New("Tx Channel full, dropping FF"))
-			t.stopSending()
-			return
-		}
+		txChan <- msg
 
 		// Start FC timeout timer
 		t.resetTxFCTimer()
@@ -148,14 +138,7 @@ func (t *Transport) handleTxTransmit(txChan chan<- CanMessage) {
 	t.txBlockCounter++
 
 	msg := t.makeTxMsg(data, Physical)
-	select {
-	case txChan <- msg:
-	default:
-		t.fireError(errors.New("Tx Channel full, dropping CF"))
-		// If we drop a CF, the transfer is likely corrupted. Abort?
-		t.stopSending()
-		return
-	}
+	txChan <- msg
 
 	if len(t.txBuffer) == 0 {
 		// Transfer finished
