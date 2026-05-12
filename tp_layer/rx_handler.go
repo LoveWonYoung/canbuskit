@@ -24,7 +24,7 @@ func (t *Transport) ProcessRx(msg CanMessage, txChan chan<- CanMessage) {
 				t.resetRxTimer()
 			}
 		}
-		t.handleTxFlowControl(f, txChan)
+		t.handleTxFlowControl(f)
 
 	case *SingleFrame:
 		t.handleRxSingleFrame(f)

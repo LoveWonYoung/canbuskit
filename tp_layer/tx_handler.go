@@ -66,7 +66,7 @@ func (t *Transport) initiateTx(payload []byte, txChan chan<- CanMessage) {
 	}
 }
 
-func (t *Transport) handleTxFlowControl(fc *FlowControlFrame, txChan chan<- CanMessage) {
+func (t *Transport) handleTxFlowControl(fc *FlowControlFrame) {
 	if t.txState != StateWaitFC {
 		// We might receive FC when we are not waiting for it (e.g. unsolicited or late).
 		// Just ignore.
