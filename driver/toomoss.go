@@ -696,7 +696,7 @@ func (c *Toomoss) Write(id int32, fd bool, data []byte) error {
 			Direction: TX, ID: canFDMsg[0].ID, DLC: canFDMsg[0].DLC, Data: canFDMsg[0].Data, IsFD: canFDMsg[0].Flags&4 != 0,
 		}
 
-		logCANMessage("TX", uint32(id), canFDMsg[0].DLC, canFDMsg[0].Data[:canFDMsg[0].DLC], logType)
+		logCANMessage("TX", uint32(id), dataLenToDlc(int(canFDMsg[0].DLC)), canFDMsg[0].Data[:canFDMsg[0].DLC], logType)
 		select {
 		case c.rxChan <- unifiedMsg:
 		default:
