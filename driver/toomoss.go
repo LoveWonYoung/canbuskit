@@ -527,7 +527,6 @@ const (
 	CANFD_MSG_FLAG_BRS = 1 << (iota - 1) // CANFD加速帧标志
 	CANFD_MSG_FLAG_ESI                   // CANFD错误状态指示
 	CANFD_MSG_FLAG_FDF                   // CANFD帧标志
-	f
 )
 
 const (
@@ -540,27 +539,50 @@ const (
 	toomossClassicFlagError    = 0x80
 )
 
+func defaultCANFDInitConfig() CANFD_INIT_CONFIG {
+	return CANFD_INIT_CONFIG{
+		Mode:         0,
+		RetrySend:    1,
+		ISOCRCEnable: 1,
+		ResEnable:    1,
+		NBT_BRP:      1,
+		NBT_SEG1:     59,
+		NBT_SEG2:     20,
+		NBT_SJW:      2,
+		DBT_BRP:      1,
+		DBT_SEG1:     14,
+		DBT_SEG2:     5,
+		DBT_SJW:      2,
+	}
+}
+
 type Toomoss struct {
-	rxChan     chan UnifiedCANMessage
-	fanout     *rxFanout
-	ctx        context.Context
-	cancel     context.CancelFunc
-	canType    CanType
-	CANChannel byte
-	legacyCAN  bool
+	rxChan           chan UnifiedCANMessage
+	fanout           *rxFanout
+	ctx              context.Context
+	cancel           context.CancelFunc
+	canType          CanType
+	CANChannel       byte
+	legacyCAN        bool
+	canFDInitConfig  CANFD_INIT_CONFIG
 }
 
 func NewToomoss(canType CanType, canChannel byte) *Toomoss {
 	rxChan := make(chan UnifiedCANMessage, RxChannelBufferSize)
 	ctx, cancel := context.WithCancel(context.Background())
 	return &Toomoss{
-		rxChan:     rxChan,
-		fanout:     newRxFanout(ctx, rxChan),
-		ctx:        ctx,
-		cancel:     cancel,
-		canType:    canType,
-		CANChannel: canChannel,
+		rxChan:          rxChan,
+		fanout:          newRxFanout(ctx, rxChan),
+		ctx:             ctx,
+		cancel:          cancel,
+		canType:         canType,
+		CANChannel:      canChannel,
+		canFDInitConfig: defaultCANFDInitConfig(),
 	}
+}
+
+func (c *Toomoss) SetCANFDInitConfig(cfg CANFD_INIT_CONFIG) {
+	c.canFDInitConfig = cfg
 }
 
 func decodeToomossClassicFlags(remoteFlag, externFlag byte) (channel byte, remote bool, extended bool, errorFrame bool, txEcho bool) {
@@ -623,20 +645,7 @@ func (c *Toomoss) Init() error {
 		return c.fallbackToLegacyCAN(errors.New("CAN-FD APIs are not available in USB2XXX.dll"))
 	}
 
-	var canFDInitConfig = CANFD_INIT_CONFIG{
-		Mode:         0,
-		RetrySend:    1,
-		ISOCRCEnable: 1,
-		ResEnable:    1,
-		NBT_BRP:      1,
-		NBT_SEG1:     59,
-		NBT_SEG2:     20,
-		NBT_SJW:      2,
-		DBT_BRP:      1,
-		DBT_SEG1:     14,
-		DBT_SEG2:     5,
-		DBT_SJW:      2,
-	}
+	canFDInitConfig := c.canFDInitConfig
 	fdSpeed, _, callErr := syscall.SyscallN(
 		CANFD_GetCANSpeedArg,
 		uintptr(DevHandle[DEVIndex]),
