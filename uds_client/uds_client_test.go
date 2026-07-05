@@ -96,6 +96,10 @@ type MockTransport struct {
 	sendQueue [][]byte
 	recvCh    chan []byte
 	fdMode    bool
+	txAddr    *isotp.Address
+	sendTxIDs []uint32
+	autoResp  []byte
+	autoDelay time.Duration
 }
 
 func NewMockTransport() *MockTransport {
@@ -106,8 +110,22 @@ func NewMockTransport() *MockTransport {
 
 func (t *MockTransport) Send(data []byte) {
 	t.mu.Lock()
-	defer t.mu.Unlock()
 	t.sendQueue = append(t.sendQueue, append([]byte{}, data...))
+	if t.txAddr != nil {
+		t.sendTxIDs = append(t.sendTxIDs, t.txAddr.TxID)
+	} else {
+		t.sendTxIDs = append(t.sendTxIDs, 0)
+	}
+	resp := append([]byte{}, t.autoResp...)
+	delay := t.autoDelay
+	t.mu.Unlock()
+
+	if len(resp) > 0 {
+		go func() {
+			time.Sleep(delay)
+			t.recvCh <- resp
+		}()
+	}
 }
 
 func (t *MockTransport) Recv() ([]byte, bool) {
@@ -133,7 +151,7 @@ func (t *MockTransport) SetFDMode(isFD bool) {
 func (t *MockTransport) SetTxAddress(addr *isotp.Address) {
 	t.mu.Lock()
 	defer t.mu.Unlock()
-	// Mock implementation: just record that it was called, or store the address if needed checks
+	t.txAddr = addr
 }
 
 func (t *MockTransport) Run(ctx context.Context, rxChan <-chan isotp.CanMessage, txChan chan<- isotp.CanMessage) {
@@ -142,6 +160,13 @@ func (t *MockTransport) Run(ctx context.Context, rxChan <-chan isotp.CanMessage,
 
 func (t *MockTransport) PushResponse(data []byte) {
 	t.recvCh <- append([]byte{}, data...)
+}
+
+func (t *MockTransport) SetAutoResponse(delay time.Duration, data []byte) {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	t.autoDelay = delay
+	t.autoResp = append([]byte{}, data...)
 }
 
 // ============================================================================
@@ -358,6 +383,49 @@ func TestSetAddressingMode(t *testing.T) {
 	}
 	if client.mode != AddressPhysical {
 		t.Error("模式应该更新为 AddressPhysical")
+	}
+}
+
+func TestRequestWithContextAndAddressingModeUsesFunctionalAddressForSingleRequest(t *testing.T) {
+	mockTransport := NewMockTransport()
+	mockTransport.SetAutoResponse(1*time.Millisecond, []byte{0x62, 0xF1, 0x90})
+	funcAddr := isotp.Address{TxID: 0x7DF, RxID: 0x7E8}
+	client := &UDSClient{
+		stack:    mockTransport,
+		mode:     AddressPhysical,
+		funcAddr: &funcAddr,
+	}
+
+	resp, err := client.RequestWithContextAndAddressingMode(
+		context.Background(),
+		[]byte{0x22, 0xF1, 0x90},
+		RequestOptions{Timeout: 50 * time.Millisecond},
+		AddressFunctional,
+	)
+	if err != nil {
+		t.Fatalf("功能寻址请求失败: %v", err)
+	}
+	if len(resp) == 0 || resp[0] != 0x62 {
+		t.Fatalf("响应不匹配: %v", resp)
+	}
+	if client.mode != AddressPhysical {
+		t.Fatalf("一次性功能寻址不应改变默认 mode，实际: %v", client.mode)
+	}
+	if len(mockTransport.sendTxIDs) != 1 || mockTransport.sendTxIDs[0] != 0x7DF {
+		t.Fatalf("功能寻址发送 ID 不匹配: %v", mockTransport.sendTxIDs)
+	}
+
+	mockTransport.SetAutoResponse(1*time.Millisecond, []byte{0x62, 0xF1, 0x91})
+	_, err = client.RequestWithContext(
+		context.Background(),
+		[]byte{0x22, 0xF1, 0x91},
+		RequestOptions{Timeout: 50 * time.Millisecond},
+	)
+	if err != nil {
+		t.Fatalf("后续物理寻址请求失败: %v", err)
+	}
+	if got := mockTransport.sendTxIDs[len(mockTransport.sendTxIDs)-1]; got != 0 {
+		t.Fatalf("后续默认请求应该恢复物理寻址，实际 tx id: 0x%X", got)
 	}
 }
 

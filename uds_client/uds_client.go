@@ -406,8 +406,28 @@ func (c *UDSClient) SendAndRecv(payload []byte, timeout time.Duration) ([]byte, 
 	})
 }
 
+// SendAndRecvWithAddressingMode sends one request with the specified addressing
+// mode without changing the client's default addressing mode.
+func (c *UDSClient) SendAndRecvWithAddressingMode(payload []byte, timeout time.Duration, mode AddressingMode) ([]byte, error) {
+	return c.RequestWithContextAndAddressingMode(context.Background(), payload, RequestOptions{
+		Timeout:    timeout,
+		MaxRetries: 0, // 保持向后兼容，不重试
+		RetryDelay: 0,
+	}, mode)
+}
+
 // RequestWithContext 发送 UDS 请求并等待响应，支持 Context 取消。
 func (c *UDSClient) RequestWithContext(ctx context.Context, payload []byte, opts RequestOptions) ([]byte, error) {
+	return c.requestWithContext(ctx, payload, opts, nil)
+}
+
+// RequestWithContextAndAddressingMode sends one request with the specified
+// addressing mode without changing the client's default addressing mode.
+func (c *UDSClient) RequestWithContextAndAddressingMode(ctx context.Context, payload []byte, opts RequestOptions, mode AddressingMode) ([]byte, error) {
+	return c.requestWithContext(ctx, payload, opts, &mode)
+}
+
+func (c *UDSClient) requestWithContext(ctx context.Context, payload []byte, opts RequestOptions, mode *AddressingMode) ([]byte, error) {
 	if len(payload) == 0 {
 		return nil, errors.New("请求 payload 不能为空")
 	}
@@ -415,7 +435,11 @@ func (c *UDSClient) RequestWithContext(ctx context.Context, payload []byte, opts
 	c.reqMu.Lock()
 	defer c.reqMu.Unlock()
 
-	if err := c.updateTxAddressLocked(c.mode); err != nil {
+	requestMode := c.mode
+	if mode != nil {
+		requestMode = *mode
+	}
+	if err := c.updateTxAddressLocked(requestMode); err != nil {
 		return nil, err
 	}
 

@@ -2,6 +2,7 @@ package preset
 
 import (
 	"fmt"
+	"sync"
 	"time"
 
 	"github.com/LoveWonYoung/canbuskit/driver"
@@ -17,6 +18,8 @@ type Preset struct {
 	FuncId    uint32
 	CanDevice driver.CANDriver
 	Client    *uds_client.UDSClient
+	readMu    sync.Mutex
+	rxChan    <-chan driver.UnifiedCANMessage
 }
 
 func NewPresetToomoss(physId, respId, funcId uint32, channel byte, canType driver.CanType) (*Preset, error) {
@@ -78,6 +81,24 @@ func (p *Preset) Request(payload []byte, timeout time.Duration) ([]byte, error) 
 	return p.Client.SendAndRecv(payload, timeout)
 }
 
+func (p *Preset) FunctionRequest(payload []byte, timeout time.Duration) ([]byte, error) {
+	return p.Client.SendAndRecvWithAddressingMode(payload, timeout, uds_client.AddressFunctional)
+}
+
 func (p *Preset) Write(id int32, fd bool, data []byte) error {
 	return p.CanDevice.Write(id, fd, data)
+}
+
+func (p *Preset) Read() <-chan driver.UnifiedCANMessage {
+	if p == nil || p.CanDevice == nil {
+		return nil
+	}
+
+	p.readMu.Lock()
+	defer p.readMu.Unlock()
+
+	if p.rxChan == nil {
+		p.rxChan = p.CanDevice.RxChan()
+	}
+	return p.rxChan
 }
