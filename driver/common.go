@@ -64,6 +64,9 @@ func dlcToLen(dlc byte) int {
 
 // logCANMessage 统一的CAN消息日志记录函数
 func logCANMessage(direction string, id uint32, dlc byte, data []byte, canType CanType) {
+	if !printLogEnabled() {
+		return
+	}
 	typeStr := "CANFD"
 	if canType == CAN {
 		typeStr = "CAN  "
