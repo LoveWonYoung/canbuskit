@@ -57,7 +57,7 @@ static fn_CANFD_GetMsg pCANFD_GetMsg = NULL;
 static fn_CANFD_SendMsg pCANFD_SendMsg = NULL;
 static fn_CANFD_GetCANSpeedArg pCANFD_GetCANSpeedArg = NULL;
 
-void toomoss_unload();
+void can_toomoss_unload();
 
 static int write_error(char* errbuf, size_t errlen, const char* prefix, const char* detail) {
 	if (errbuf != NULL && errlen > 0) {
@@ -76,12 +76,12 @@ static int write_error(char* errbuf, size_t errlen, const char* prefix, const ch
 		dst = (type)dlsym(g_usb2xxx, name); \
 		const char* sym_err = dlerror(); \
 		if (sym_err != NULL || dst == NULL) { \
-			toomoss_unload(); \
+			can_toomoss_unload(); \
 			return write_error(errbuf, errlen, name, sym_err); \
 		} \
 	} while (0)
 
-int toomoss_load(const char* libusb_path, const char* usb2xxx_path, char* errbuf, size_t errlen) {
+int can_toomoss_load(const char* libusb_path, const char* usb2xxx_path, char* errbuf, size_t errlen) {
 	if (g_usb2xxx != NULL) {
 		return 0;
 	}
@@ -115,7 +115,7 @@ int toomoss_load(const char* libusb_path, const char* usb2xxx_path, char* errbuf
 	return 0;
 }
 
-void toomoss_unload() {
+void can_toomoss_unload() {
 	pUSB_ScanDevice = NULL;
 	pUSB_OpenDevice = NULL;
 	pUSB_CloseDevice = NULL;
@@ -135,42 +135,42 @@ void toomoss_unload() {
 	}
 }
 
-int toomoss_usb_scan_device(int* pDevHandle) {
+int can_toomoss_usb_scan_device(int* pDevHandle) {
 	if (pUSB_ScanDevice == NULL) return -1;
 	return pUSB_ScanDevice(pDevHandle);
 }
 
-int toomoss_usb_open_device(int DevHandle) {
+int can_toomoss_usb_open_device(int DevHandle) {
 	if (pUSB_OpenDevice == NULL) return -1;
 	return pUSB_OpenDevice(DevHandle);
 }
 
-int toomoss_usb_close_device(int DevHandle) {
+int can_toomoss_usb_close_device(int DevHandle) {
 	if (pUSB_CloseDevice == NULL) return -1;
 	return pUSB_CloseDevice(DevHandle);
 }
 
-int toomoss_canfd_init(int DevHandle, uint8_t CANIndex, CANFD_INIT_CONFIG* pCanConfig) {
+int can_toomoss_canfd_init(int DevHandle, uint8_t CANIndex, CANFD_INIT_CONFIG* pCanConfig) {
 	if (pCANFD_Init == NULL) return -1;
 	return pCANFD_Init(DevHandle, CANIndex, pCanConfig);
 }
 
-int toomoss_canfd_start_get_msg(int DevHandle, uint8_t CANIndex) {
+int can_toomoss_canfd_start_get_msg(int DevHandle, uint8_t CANIndex) {
 	if (pCANFD_StartGetMsg == NULL) return -1;
 	return pCANFD_StartGetMsg(DevHandle, CANIndex);
 }
 
-int toomoss_canfd_get_msg(int DevHandle, uint8_t CANIndex, CANFD_MSG* pCanMsg, int MsgBufferSize) {
+int can_toomoss_canfd_get_msg(int DevHandle, uint8_t CANIndex, CANFD_MSG* pCanMsg, int MsgBufferSize) {
 	if (pCANFD_GetMsg == NULL) return -1;
 	return pCANFD_GetMsg(DevHandle, CANIndex, pCanMsg, MsgBufferSize);
 }
 
-int toomoss_canfd_send_msg(int DevHandle, uint8_t CANIndex, CANFD_MSG* pCanMsg, uint32_t SendMsgNum) {
+int can_toomoss_canfd_send_msg(int DevHandle, uint8_t CANIndex, CANFD_MSG* pCanMsg, uint32_t SendMsgNum) {
 	if (pCANFD_SendMsg == NULL) return -1;
 	return pCANFD_SendMsg(DevHandle, CANIndex, pCanMsg, SendMsgNum);
 }
 
-int toomoss_canfd_get_speed_arg(int DevHandle, CANFD_INIT_CONFIG* pCanConfig, uint32_t ABitrate, uint32_t DBitrate) {
+int can_toomoss_canfd_get_speed_arg(int DevHandle, CANFD_INIT_CONFIG* pCanConfig, uint32_t ABitrate, uint32_t DBitrate) {
 	if (pCANFD_GetCANSpeedArg == NULL) return -1;
 	return pCANFD_GetCANSpeedArg(DevHandle, pCanConfig, ABitrate, DBitrate);
 }
@@ -220,7 +220,7 @@ func ensureToomossLoaded() error {
 	defer C.free(unsafe.Pointer(usb2xxxPath))
 
 	var errBuf [512]C.char
-	if ret := C.toomoss_load(libusbPath, usb2xxxPath, &errBuf[0], C.size_t(len(errBuf))); ret != 0 {
+	if ret := C.can_toomoss_load(libusbPath, usb2xxxPath, &errBuf[0], C.size_t(len(errBuf))); ret != 0 {
 		return fmt.Errorf("load Toomoss dylib failed: %s", C.GoString(&errBuf[0]))
 	}
 
@@ -233,7 +233,7 @@ func usbScan() (bool, error) {
 		return false, err
 	}
 
-	ret := int(C.toomoss_usb_scan_device(&DevHandle[DEVIndex]))
+	ret := int(C.can_toomoss_usb_scan_device(&DevHandle[DEVIndex]))
 	if ret <= 0 {
 		return false, nil
 	}
@@ -254,7 +254,7 @@ func usbOpen() (bool, error) {
 		return false, err
 	}
 
-	stateValue := int(C.toomoss_usb_open_device(DevHandle[DEVIndex]))
+	stateValue := int(C.can_toomoss_usb_open_device(DevHandle[DEVIndex]))
 	return stateValue >= 1, nil
 }
 
@@ -275,12 +275,12 @@ func usbClose() error {
 		return nil
 	}
 
-	ret := int(C.toomoss_usb_close_device(DevHandle[DEVIndex]))
+	ret := int(C.can_toomoss_usb_close_device(DevHandle[DEVIndex]))
 	if ret < 1 {
 		return fmt.Errorf("USB_CloseDevice returned %d", ret)
 	}
 
-	C.toomoss_unload()
+	C.can_toomoss_unload()
 	resetToomossState()
 	return nil
 }
@@ -358,18 +358,18 @@ func (c *Toomoss) Init() error {
 		DBT_SJW:      C.uint8_t(2),
 	}
 
-	fdSpeed := int(C.toomoss_canfd_get_speed_arg(
+	fdSpeed := int(C.can_toomoss_canfd_get_speed_arg(
 		DevHandle[DEVIndex],
 		&canFDInitConfig,
 		C.uint32_t(SpeedBpsNBT),
 		C.uint32_t(SpeedBpsDBT),
 	))
-	canfdInit := int(C.toomoss_canfd_init(
+	canfdInit := int(C.can_toomoss_canfd_init(
 		DevHandle[DEVIndex],
 		C.uint8_t(c.CANChannel),
 		&canFDInitConfig,
 	))
-	fdStart := int(C.toomoss_canfd_start_get_msg(
+	fdStart := int(C.can_toomoss_canfd_start_get_msg(
 		DevHandle[DEVIndex],
 		C.uint8_t(c.CANChannel),
 	))
@@ -411,7 +411,7 @@ func (c *Toomoss) readLoop() {
 		case <-c.ctx.Done():
 			return
 		case <-ticker.C:
-			getCanFDMsgNum := int(C.toomoss_canfd_get_msg(
+			getCanFDMsgNum := int(C.can_toomoss_canfd_get_msg(
 				DevHandle[DEVIndex],
 				C.uint8_t(c.CANChannel),
 				&canFDMsg[0],
@@ -469,7 +469,7 @@ func (c *Toomoss) readLoop() {
 func (c *Toomoss) drainInitialBuffer() {
 	var canFDMsg [MsgBufferSize]C.CANFD_MSG
 	for {
-		n := int(C.toomoss_canfd_get_msg(
+		n := int(C.can_toomoss_canfd_get_msg(
 			DevHandle[DEVIndex],
 			C.uint8_t(c.CANChannel),
 			&canFDMsg[0],
@@ -507,7 +507,7 @@ func (c *Toomoss) Write(id int32, fd bool, data []byte) error {
 		msg.Data[i] = C.uint8_t(data[i])
 	}
 
-	sendRet := int(C.toomoss_canfd_send_msg(
+	sendRet := int(C.can_toomoss_canfd_send_msg(
 		DevHandle[DEVIndex],
 		C.uint8_t(c.CANChannel),
 		&msg,
