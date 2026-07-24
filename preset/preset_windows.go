@@ -4,8 +4,8 @@ package preset
 
 import "github.com/LoveWonYoung/canbuskit/driver"
 
-func NewPresetTSMaster(physId, respId, funcId uint32, channel byte, canType driver.CanType) (*Preset, error) {
-	drv := driver.NewTSMaster(canType, channel)
+func NewPresetTSMaster(physId, respId, funcId uint32, channel byte, canType driver.CanType, deviceType int) (*Preset, error) {
+	drv := driver.NewTSMaster(canType, channel, deviceType)
 	return newPreset(drv, physId, respId, funcId, canType == driver.CANFD)
 }
 

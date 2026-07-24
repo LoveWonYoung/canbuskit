@@ -20,6 +20,187 @@ import (
 	"golang.org/x/sys/windows/registry"
 )
 
+const (
+	BUS_UNKNOWN_TYPE = iota
+	TS_TCP_DEVICE
+	XL_USB_DEVICE
+	TS_USB_DEVICE
+	PEAK_USB_DEVICE
+	KVASER_USB_DEVICE
+	ZLG_USB_DEVICE
+	ICS_USB_DEVICE
+	TS_TC1005_DEVICE
+	CANABLE_USB_DEVICE
+	TS_WIRELESS_OBD
+	TS_USB_DEVICE_EX
+	IXXAT_USB_DEVICE
+	TS_ETH_IF_DEVICE
+	TS_USB_IF_DEVICE
+	BUS_DEV_TYPE_COUNT
+)
+
+// TSMaster
+const (
+	TS_UNKNOWN_DEVICE = iota
+	TSCAN_PRO
+	TSCAN_Lite1
+	TC1001
+	TL1001
+	TC1011
+	TM5011
+	TC1002
+	TC1014
+	TSCANFD2517
+	TC1026
+	TC1016
+	TC1012
+	TC1013
+	TLog1002
+	TC1034
+	TC1018
+	GW2116
+	TC2115
+	MP1013
+	TC1113
+	TC1114
+	TP1013
+	TC1017
+	TP1018
+	TF10XX
+	TL1004_FD_4_LIN_2
+	TE1051
+	TP1051
+	TP1034
+	TTS9015
+	TP1026
+	TTS1026
+	TTS1034
+	TTS1018
+	TL1011
+	TTS1015_LiAuto
+	TTS1013_LiAuto
+	TTS1016Pro
+	TC1054Pro
+	TC1054
+	TLog1038
+	TO1013
+	TC1034Pro
+	TC1018Pro
+	TC1038Pro
+	TC1014Pro
+	TC1034ProPlus
+	TA1038
+	TC1055Pro
+	TC1056Pro
+	TC1057Pro
+	TC4016
+	GW2208
+	TLog1039
+	GW1040
+	TC3014
+	TP1014
+	TA825_4
+	TC1013HV
+	TC1052
+	TTS1017Pro
+	TLog1057
+	TC1017Pro
+	GW2202
+	GW2204
+	GW2212
+	TA821
+	TX1000
+	TC1055ProPlus
+	TC1043
+	TS_DEV_END
+)
+
+// TSMasterMap 设备编号对照表
+var TSMasterMap = map[string]int{
+	"TS_UNKNOWN_DEVICE": TS_UNKNOWN_DEVICE,
+	"TSCAN_PRO":         TSCAN_PRO,
+	"TSCAN_Lite1":       TSCAN_Lite1,
+	"TC1001":            TC1001,
+	"TL1001":            TL1001,
+	"TC1011":            TC1011,
+	"TM5011":            TM5011,
+	"TC1002":            TC1002,
+	"TC1014":            TC1014,
+	"TSCANFD2517":       TSCANFD2517,
+	"TC1026":            TC1026,
+	"TC1016":            TC1016,
+	"TC1012":            TC1012,
+	"TC1013":            TC1013,
+	"TLog1002":          TLog1002,
+	"TC1034":            TC1034,
+	"TC1018":            TC1018,
+	"GW2116":            GW2116,
+	"TC2115":            TC2115,
+	"MP1013":            MP1013,
+	"TC1113":            TC1113,
+	"TC1114":            TC1114,
+	"TP1013":            TP1013,
+	"TC1017":            TC1017,
+	"TP1018":            TP1018,
+	"TF10XX":            TF10XX,
+	"TL1004_FD_4_LIN_2": TL1004_FD_4_LIN_2,
+	"TE1051":            TE1051,
+	"TP1051":            TP1051,
+	"TP1034":            TP1034,
+	"TTS9015":           TTS9015,
+	"TP1026":            TP1026,
+	"TTS1026":           TTS1026,
+	"TTS1034":           TTS1034,
+	"TTS1018":           TTS1018,
+	"TL1011":            TL1011,
+	"TTS1015_LiAuto":    TTS1015_LiAuto,
+	"TTS1013_LiAuto":    TTS1013_LiAuto,
+	"TTS1016Pro":        TTS1016Pro,
+	"TC1054Pro":         TC1054Pro,
+	"TC1054":            TC1054,
+	"TLog1038":          TLog1038,
+	"TO1013":            TO1013,
+	"TC1034Pro":         TC1034Pro,
+	"TC1018Pro":         TC1018Pro,
+	"TC1038Pro":         TC1038Pro,
+	"TC1014Pro":         TC1014Pro,
+	"TC1034ProPlus":     TC1034ProPlus,
+	"TA1038":            TA1038,
+	"TC1055Pro":         TC1055Pro,
+	"TC1056Pro":         TC1056Pro,
+	"TC1057Pro":         TC1057Pro,
+	"TC4016":            TC4016,
+	"GW2208":            GW2208,
+	"TLog1039":          TLog1039,
+	"GW1040":            GW1040,
+	"TC3014":            TC3014,
+	"TP1014":            TP1014,
+	"TA825_4":           TA825_4,
+	"TC1013HV":          TC1013HV,
+	"TC1052":            TC1052,
+	"TTS1017Pro":        TTS1017Pro,
+	"TLog1057":          TLog1057,
+	"TC1017Pro":         TC1017Pro,
+	"GW2202":            GW2202,
+	"GW2204":            GW2204,
+	"GW2212":            GW2212,
+	"TA821":             TA821,
+	"TX1000":            TX1000,
+	"TC1055ProPlus":     TC1055ProPlus,
+	"TC1043":            TC1043,
+	"TS_DEV_END":        TS_DEV_END,
+}
+
+// deviceNameFromType 根据设备编号反查设备名称
+func deviceNameFromType(deviceType int) (string, error) {
+	for name, id := range TSMasterMap {
+		if id == deviceType && name != "TS_UNKNOWN_DEVICE" && name != "TS_DEV_END" {
+			return name, nil
+		}
+	}
+	return "", fmt.Errorf("unsupported TSMaster device type: %d", deviceType)
+}
+
 type TSMasterLoader struct {
 	DLL     *syscall.LazyDLL
 	DLLPath string
@@ -145,9 +326,10 @@ type TSMaster struct {
 	cancel      context.CancelFunc
 	canType     CanType
 	CANChannel  byte
+	deviceType  int
 }
 
-func NewTSMaster(cantype CanType, canChannel byte) *TSMaster {
+func NewTSMaster(cantype CanType, canChannel byte, deviceType int) *TSMaster {
 	ctx, cancel := context.WithCancel(context.Background())
 	return &TSMaster{
 		rxChan:     make(chan UnifiedCANMessage, RxChannelBufferSize),
@@ -155,6 +337,7 @@ func NewTSMaster(cantype CanType, canChannel byte) *TSMaster {
 		cancel:     cancel,
 		canType:    cantype,
 		CANChannel: canChannel,
+		deviceType: deviceType,
 	}
 }
 
@@ -219,20 +402,37 @@ func (t *TSMaster) Init() error {
 	// 设置CAN通道数量
 	r, _, _ = t.loader.GetProcAddress("tsapp_set_can_channel_count").Call(uintptr(4))
 	fmt.Printf("Set CAN channel count result: %d\n", r)
-	deviceName, _ := syscall.UTF16PtrFromString("TC1016")
-	// 设置映射
+	devName, err := deviceNameFromType(t.deviceType)
+	if err != nil {
+		return cleanup(err)
+	}
+	deviceName, _ := syscall.UTF16PtrFromString(devName)
+	// TSAPI(s32)tsapp_set_mapping_verbose(
+	// const char* AAppName,
+	// const TLIBApplicationChannelType AAppChannelType,
+	// const s32 AAppChannel,
+	// const char* AHardwareName,
+	// const TLIBBusToolDeviceType AHardwareType,
+	// const s32 AHardwareSubType,
+	// const s32 AHardwareIndex,
+	// const s32 AHardwareChannel,
+	// const bool AEnableMapping);
+	// 设置映射: APP_CAN -> TS_USB_DEVICE(3) / deviceSubType / CANChannel
 	r, _, _ = t.loader.GetProcAddress("tsapp_set_mapping_verbose").Call(
 		uintptr(unsafe.Pointer(appName)),
-		uintptr(0),
-		uintptr(0),
+		uintptr(0), // APP_CAN
+		uintptr(0), // 软件通道
 		uintptr(unsafe.Pointer(deviceName)),
-		uintptr(3),
-		uintptr(11),
-		uintptr(0),
-		uintptr(0),
-		uintptr(1), // True
+		uintptr(TS_USB_DEVICE), // TS_USB_DEVICE
+		uintptr(t.deviceType),  // 设备子类型
+		uintptr(0),             // 硬件索引
+		uintptr(0),             // 硬件通道
+		uintptr(1),             // 启用映射
 	)
-	fmt.Printf("Set mapping verbose result: %d\n", r)
+	fmt.Printf("Set mapping verbose (%s/%d) result: %d\n", devName, t.deviceType, r)
+	if r != 0 {
+		return cleanup(fmt.Errorf("tsapp_set_mapping_verbose failed: %d", r))
+	}
 	//tsapp_configure_baudrate_canfd(0, 500.0, 2000.0, 1, 0, True):
 	br := float32(500.0)
 	bd := float32(2000.0)
