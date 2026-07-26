@@ -3,7 +3,6 @@
 package driver
 
 import (
-	"context"
 	"errors"
 	"fmt"
 	"log"
@@ -87,11 +86,11 @@ func (a *AutoDriver) Init() error {
 			errs = append(errs, fmt.Sprintf("%s: %v", strings.ToLower(candidate.Name), err))
 			continue
 		}
-		isFD, ok := DetectFDMode(dev)
+		isFD := dev.IsFDMode()
 		wantFD := cfg.Mode == CANFD
-		if !ok || isFD != wantFD {
+		if isFD != wantFD {
 			dev.Stop()
-			err := fmt.Errorf("initialized in incompatible mode (want CAN-FD=%t, got CAN-FD=%t, capability=%t)", wantFD, isFD, ok)
+			err := fmt.Errorf("initialized in incompatible mode (want CAN-FD=%t, got CAN-FD=%t)", wantFD, isFD)
 			log.Printf("Auto driver: %s rejected: %v", candidate.Name, err)
 			errs = append(errs, fmt.Sprintf("%s: %v", strings.ToLower(candidate.Name), err))
 			continue
@@ -138,18 +137,11 @@ func (a *AutoDriver) RxChan() <-chan UnifiedCANMessage {
 	return nil
 }
 
-func (a *AutoDriver) Context() context.Context {
-	if drv := a.getDriver(); drv != nil {
-		return drv.Context()
-	}
-	return context.Background()
-}
-
 func (a *AutoDriver) IsFDMode() bool {
 	a.mu.Lock()
 	defer a.mu.Unlock()
-	if provider, ok := a.driver.(FDModeProvider); ok {
-		return provider.IsFDMode()
+	if a.driver != nil {
+		return a.driver.IsFDMode()
 	}
 	return a.canType == CANFD
 }
@@ -157,9 +149,6 @@ func (a *AutoDriver) IsFDMode() bool {
 func (a *AutoDriver) Config() Config {
 	a.mu.Lock()
 	defer a.mu.Unlock()
-	if provider, ok := a.driver.(ConfigProvider); ok {
-		return provider.Config()
-	}
 	return a.cfg
 }
 

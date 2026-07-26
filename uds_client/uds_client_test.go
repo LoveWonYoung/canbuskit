@@ -19,7 +19,6 @@ import (
 type MockCANDriver struct {
 	mu        sync.Mutex
 	rxChan    chan driver.UnifiedCANMessage
-	ctx       context.Context
 	cancel    context.CancelFunc
 	fdMode    bool
 	writeLog  [][]byte       // 记录所有写入的数据
@@ -35,10 +34,9 @@ type MockResponse struct {
 }
 
 func NewMockCANDriver() *MockCANDriver {
-	ctx, cancel := context.WithCancel(context.Background())
+	_, cancel := context.WithCancel(context.Background())
 	return &MockCANDriver{
 		rxChan: make(chan driver.UnifiedCANMessage, 100),
-		ctx:    ctx,
 		cancel: cancel,
 	}
 }
@@ -46,7 +44,6 @@ func NewMockCANDriver() *MockCANDriver {
 func (m *MockCANDriver) Init() error                             { return m.initErr }
 func (m *MockCANDriver) Start()                                  {}
 func (m *MockCANDriver) Stop()                                   { m.cancel() }
-func (m *MockCANDriver) Context() context.Context                { return m.ctx }
 func (m *MockCANDriver) RxChan() <-chan driver.UnifiedCANMessage { return m.rxChan }
 func (m *MockCANDriver) IsFDMode() bool                          { return m.fdMode }
 
@@ -65,10 +62,11 @@ func (m *MockCANDriver) Write(id int32, fd bool, data []byte) error {
 			var dataArr [64]byte
 			copy(dataArr[:], resp.Data)
 			m.rxChan <- driver.UnifiedCANMessage{
-				ID:   0x7C7,
-				DLC:  byte(len(resp.Data)),
-				Data: dataArr,
-				IsFD: false,
+				Direction: driver.RX,
+				ID:        0x7C7,
+				DLC:       byte(len(resp.Data)),
+				Data:      dataArr,
+				IsFD:      false,
 			}
 		}()
 	}
@@ -343,8 +341,7 @@ func TestSetAddressingMode(t *testing.T) {
 	mockTransport := NewMockTransport()
 	// 注意：这里我们需要手动构造 UDSClient，因为 newUDSClient 是未导出的 (或者我们可以导出一个 NewOption?)
 	// 但由于我们在同一个包内测试 (package uds_client)，我们可以直接调用 internal 构造函数 newUDSClient
-	// 不过 newUDSClient 需要 *driver.Adapter，这很难 mock。
-	// 为了测试方便，我们可能需要重构 newUDSClient 使得它接受 adapter 接口，或者我们手动构造 Client。
+	// 这里直接构造 Client，只测试寻址状态切换。
 
 	// 手动构造 client 以便注入 mockTransport
 	client := &UDSClient{
@@ -486,6 +483,42 @@ func TestNewUDSClient_AutoSyncFDMode(t *testing.T) {
 	}
 	if stack.MaxDataLength != 64 {
 		t.Fatalf("expected max data length 64, got %d", stack.MaxDataLength)
+	}
+}
+
+func TestUDSClientContinuesAfterFilteredTXEcho(t *testing.T) {
+	mockDriver := NewMockCANDriver()
+	mockDriver.rxChan <- driver.UnifiedCANMessage{
+		Direction: driver.TX,
+		ID:        0x700,
+		DLC:       1,
+	}
+	mockDriver.SetResponses(MockResponse{
+		Data: []byte{0x04, 0x62, 0xF1, 0x90, 0x01},
+	})
+
+	addr, err := isotp.NewAddress(0x700, 0x7C7)
+	if err != nil {
+		t.Fatal(err)
+	}
+	client, err := NewUDSClient(mockDriver, addr, isotp.DefaultConfig())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer client.Close()
+
+	resp, err := client.SendAndRecv([]byte{0x22, 0xF1, 0x90}, time.Second)
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := []byte{0x62, 0xF1, 0x90, 0x01}
+	if len(resp) != len(want) {
+		t.Fatalf("response length = %d, want %d", len(resp), len(want))
+	}
+	for i := range want {
+		if resp[i] != want[i] {
+			t.Fatalf("response = % X, want % X", resp, want)
+		}
 	}
 }
 

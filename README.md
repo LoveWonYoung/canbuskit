@@ -5,8 +5,6 @@
 - 多种底层 CAN 驱动封装
 - ISO-TP 传输层实现
 - UDS 客户端
-- 常见 UDS 服务封装
-- 面向刷写场景的 HEX / SREC 分块辅助能力
 
 项目适合做 ECU 诊断、刷写、自动化测试，以及把不同 CAN 硬件接入统一的 Go 接口。
 
@@ -14,14 +12,13 @@
 
 ## 模块结构
 
-仓库主要分成四层：
+仓库主要分成三层：
 
 - `driver`：底层 CAN 驱动统一接口，屏蔽不同厂商设备差异
 - `tp_layer`：ISO-15765-2 传输层，实现单帧、多帧、流控、超时管理
 - `uds_client`：基于 `driver + ISO-TP` 的 UDS 客户端，负责请求、超时、负响应和重试逻辑
-- `services`：对常见 UDS 服务做了更高层封装
 
-如果现成服务不够用，也可以直接调用 `UDSClient.Request(...)` 发送任意 SID。
+通过 `UDSClient.Request(...)` 可以发送任意 UDS SID。
 
 ## 已支持的驱动
 
@@ -50,7 +47,7 @@ go get github.com/LoveWonYoung/canbuskit
 
 下面示例演示一个典型链路：
 
-`CAN Driver -> Adapter -> ISO-TP -> UDS Client -> UDS Service`
+`CAN Driver -> ISO-TP -> UDS Client`
 
 ```go
 package main
@@ -60,7 +57,6 @@ import (
 	"log"
 
 	"github.com/LoveWonYoung/canbuskit/driver"
-	"github.com/LoveWonYoung/canbuskit/services"
 	isotp "github.com/LoveWonYoung/canbuskit/tp_layer"
 	"github.com/LoveWonYoung/canbuskit/uds_client"
 )
@@ -79,15 +75,12 @@ func main() {
 	}
 	defer client.Close()
 
-	client.SetFDMode(true)
-
-	rdbi := services.NewReadDataByIdentifier(client)
-	resp, err := rdbi.ReadDataByIdentifier(0xF190)
+	resp, err := client.Request([]byte{0x22, 0xF1, 0x90})
 	if err != nil {
 		log.Fatal(err)
 	}
 
-	fmt.Printf("VIN: %X\n", resp.Values[0xF190])
+	fmt.Printf("response: %X\n", resp)
 }
 ```
 
@@ -139,7 +132,7 @@ mapping := driver.TSMasterMapping{
 tsmaster := driver.NewTSMasterWithMapping(cfg, driver.TC1016, mapping)
 ```
 
-`IncludeTxEcho` 默认为 `false`。抓包程序如果需要同时观察发送帧，可以显式开启；ISO-TP Adapter 始终只接收 RX 帧。
+`IncludeTxEcho` 默认为 `false`。抓包程序如果需要同时观察发送帧，可以显式开启；UDS 客户端始终只处理 RX 帧。
 
 `AutoDriver` 会按默认顺序探测设备，清理初始化失败或模式不匹配的候选。也可以通过 `AutoCandidate` 传入自定义顺序和设备构造参数。
 
@@ -177,7 +170,7 @@ cfg := isotp.DefaultConfig()
 - `0x78 Response Pending` 自动继续等待
 - 可重试负响应的有限重试
 - 物理地址 / 功能地址切换
-- CAN / CAN FD 切换
+- 根据驱动配置自动选择 CAN / CAN FD
 
 常用方法：
 
@@ -185,7 +178,6 @@ cfg := isotp.DefaultConfig()
 - `RequestWithTimeout(payload, timeout)`
 - `RequestWithContext(ctx, payload, opts)`
 - `SendAndRecv(payload, timeout)`
-- `SetFDMode(isFD bool)`
 - `SetFunctionalAddress(addr)`
 - `UseFunctionalAddress()`
 - `UsePhysicalAddress()`
@@ -196,98 +188,11 @@ cfg := isotp.DefaultConfig()
 resp, err := client.Request([]byte{0x10, 0x03})
 ```
 
-## 已封装的 UDS 服务
-
-`services` 目录目前包含：
-
-- `ReadDataByIdentifier` (`0x22`)
-- `RoutineControl` (`0x31`)
-- `RequestDownload` (`0x34`)
-- `TransferData` (`0x36`)
-- `RequestTransferExit` (`0x37`)
-- `SecurityAccess` (`0x27`)
-
-示例：读取多个 DID
-
-```go
-rdbi := services.NewReadDataByIdentifier(client)
-
-resp, err := rdbi.ReadDataByIdentifierWithLengths(
-	map[uint16]int{
-		0xF187: 16,
-		0xF190: 17,
-	},
-	0xF187,
-	0xF190,
-)
-if err != nil {
-	log.Fatal(err)
-}
-
-fmt.Printf("DID F187: %X\n", resp.Values[0xF187])
-fmt.Printf("DID F190: %X\n", resp.Values[0xF190])
-```
-
-## 刷写流程示例
-
-仓库已经提供了刷写链路里最常见的几个步骤封装：
-
-1. `RequestDownload`
-2. `TransferData`
-3. `RequestTransferExit`
-
-同时支持把 HEX / SREC 文件解析成分段和分块。
-
-```go
-reqDownload := services.NewRequestDownload(client)
-transfer := services.NewTransferData(client)
-exit := services.NewRequestTransferExit(client)
-
-downloadResp, err := reqDownload.RequestDownload(0x00100000, 0x00002000, 4, 4)
-if err != nil {
-	log.Fatal(err)
-}
-
-fmt.Printf("ECU max block len: %d\n", downloadResp.MaxLength)
-
-_, nextSeq, err := transfer.TransferHexFile("./app.hex", 256, 1)
-if err != nil {
-	log.Fatal(err)
-}
-
-fmt.Printf("next sequence: 0x%02X\n", nextSeq)
-
-_, err = exit.RequestTransferExit(nil)
-if err != nil {
-	log.Fatal(err)
-}
-```
-
-如果你只想解析文件，不立刻发送，也可以直接使用：
-
-- `ParseHexSegments`
-- `MyHexParser`
-- `MyHexParserWithLengths`
-
-支持按扩展名或内容自动识别：
-
-- Intel HEX
-- SREC / S19 / S28 / S37
-
-## SecurityAccess 说明
-
-`services.SecurityAccess` 在不同平台行为不同：
-
-- Windows：通过 `SecKey.dll` 加载 `SecKeyCmac` 计算 key
-- 非 Windows：提供 stub，实现会返回不支持错误
-
-如果你的项目依赖 `SecurityAccess`，需要自行准备匹配 ECU 算法的 `SecKey.dll`。
-
 ## 注意事项
 
 - `driver` 层只提供统一的 `Write(id, fd, data)` 能力，通过 `fd` 标志在同一函数里发送 CAN / CAN-FD。
 - 驱动层只接受 `0x000-0x7FF` 的标准 11 位 CAN ID。
-- `services` 只封装了部分常见 UDS 服务；其他服务建议直接用 `UDSClient.Request(...)`。
+- UDS 服务请求由调用方通过 `UDSClient.Request(...)` 直接组装。
 - `UDSClient.Close()` 会同时关闭后台 goroutine 和底层设备连接，使用结束后应主动调用。
 
 ## 测试

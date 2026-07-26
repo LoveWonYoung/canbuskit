@@ -22,7 +22,7 @@ type Preset struct {
 	rxChan    <-chan driver.UnifiedCANMessage
 }
 
-func newPreset(drv driver.CANDriver, physId, respId, funcId uint32, fd bool) (*Preset, error) {
+func newPreset(drv driver.CANDriver, physId, respId, funcId uint32) (*Preset, error) {
 	physAddr, err := tp_layer.NewAddress(physId, respId)
 	if err != nil {
 		return nil, fmt.Errorf("build physical address: %w", err)
@@ -45,10 +45,6 @@ func newPreset(drv driver.CANDriver, physId, respId, funcId uint32, fd bool) (*P
 		client.Close()
 		return nil, fmt.Errorf("set functional address: %w", err)
 	}
-	if fd {
-		client.SetFDMode(true)
-	}
-
 	return &Preset{
 		PhysId:    physId,
 		RespId:    respId,

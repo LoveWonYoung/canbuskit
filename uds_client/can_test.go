@@ -1,38 +1,39 @@
-package driver
+package uds_client
 
-import "testing"
+import (
+	"testing"
 
-func TestAdapterDropsTXEchoAndNonStandardID(t *testing.T) {
-	adapter := &Adapter{}
+	"github.com/LoveWonYoung/canbuskit/driver"
+)
 
-	if _, ok := adapter.convertRXMessage(UnifiedCANMessage{
-		Direction: TX,
+func TestConvertRXMessageDropsTXEchoAndNonStandardID(t *testing.T) {
+	if _, ok := convertRXMessage(driver.UnifiedCANMessage{
+		Direction: driver.TX,
 		ID:        0x123,
 		DLC:       1,
-	}, true); ok {
+	}); ok {
 		t.Fatal("TX echo was passed to ISO-TP")
 	}
 
-	if _, ok := adapter.convertRXMessage(UnifiedCANMessage{
-		Direction: RX,
+	if _, ok := convertRXMessage(driver.UnifiedCANMessage{
+		Direction: driver.RX,
 		ID:        0x800,
 		DLC:       1,
-	}, true); ok {
+	}); ok {
 		t.Fatal("non-standard CAN ID was passed to ISO-TP")
 	}
 }
 
-func TestAdapterConvertsStandardRXFrame(t *testing.T) {
-	adapter := &Adapter{}
-	raw := UnifiedCANMessage{
-		Direction: RX,
+func TestConvertRXMessageConvertsStandardFrame(t *testing.T) {
+	raw := driver.UnifiedCANMessage{
+		Direction: driver.RX,
 		ID:        0x7E8,
 		DLC:       3,
 		IsFD:      true,
 	}
 	copy(raw.Data[:], []byte{0x02, 0x50, 0x03})
 
-	msg, ok := adapter.convertRXMessage(raw, true)
+	msg, ok := convertRXMessage(raw)
 	if !ok {
 		t.Fatal("standard RX frame was dropped")
 	}

@@ -704,15 +704,6 @@ func (t *TSMaster) RxChan() <-chan UnifiedCANMessage {
 	}
 	return t.fanout.Subscribe(t.cfg.RxBufferSize)
 }
-func (t *TSMaster) Context() context.Context {
-	t.lifecycle.opMu.Lock()
-	defer t.lifecycle.opMu.Unlock()
-	if t.ctx != nil {
-		return t.ctx
-	}
-	return context.Background()
-}
-
 func (t *TSMaster) IsFDMode() bool {
 	t.lifecycle.opMu.Lock()
 	defer t.lifecycle.opMu.Unlock()

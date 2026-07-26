@@ -1,7 +1,6 @@
 package preset
 
 import (
-	"context"
 	"sync"
 	"testing"
 
@@ -12,20 +11,17 @@ type presetMockDriver struct {
 	mu      sync.Mutex
 	rxChan  chan driver.UnifiedCANMessage
 	rxCalls int
-	ctx     context.Context
 }
 
 func newPresetMockDriver() *presetMockDriver {
 	return &presetMockDriver{
 		rxChan: make(chan driver.UnifiedCANMessage, 1),
-		ctx:    context.Background(),
 	}
 }
 
-func (m *presetMockDriver) Init() error              { return nil }
-func (m *presetMockDriver) Start()                   {}
-func (m *presetMockDriver) Stop()                    {}
-func (m *presetMockDriver) Context() context.Context { return m.ctx }
+func (m *presetMockDriver) Init() error { return nil }
+func (m *presetMockDriver) Start()      {}
+func (m *presetMockDriver) Stop()       {}
 func (m *presetMockDriver) Write(id int32, fd bool, data []byte) error {
 	return nil
 }
@@ -36,6 +32,8 @@ func (m *presetMockDriver) RxChan() <-chan driver.UnifiedCANMessage {
 	m.rxCalls++
 	return m.rxChan
 }
+
+func (m *presetMockDriver) IsFDMode() bool { return false }
 
 func (m *presetMockDriver) rxCallCount() int {
 	m.mu.Lock()

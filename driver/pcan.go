@@ -259,12 +259,6 @@ func (p *PCAN) RxChan() <-chan UnifiedCANMessage {
 	return p.fanout.Subscribe(p.cfg.RxBufferSize)
 }
 
-func (p *PCAN) Context() context.Context {
-	p.lifecycle.opMu.Lock()
-	defer p.lifecycle.opMu.Unlock()
-	return p.ctx
-}
-
 func (p *PCAN) Config() Config {
 	p.lifecycle.opMu.Lock()
 	defer p.lifecycle.opMu.Unlock()

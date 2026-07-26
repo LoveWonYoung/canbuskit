@@ -3,7 +3,6 @@
 package driver
 
 import (
-	"context"
 	"errors"
 	"testing"
 )
@@ -23,7 +22,6 @@ func (d *autoTestDriver) Start()                           {}
 func (d *autoTestDriver) Stop()                            { d.stopped = true }
 func (d *autoTestDriver) Write(int32, bool, []byte) error  { return nil }
 func (d *autoTestDriver) RxChan() <-chan UnifiedCANMessage { return nil }
-func (d *autoTestDriver) Context() context.Context         { return context.Background() }
 func (d *autoTestDriver) IsFDMode() bool                   { return d.fd }
 
 func TestAutoDriverCleansFailuresAndRejectsModeMismatch(t *testing.T) {

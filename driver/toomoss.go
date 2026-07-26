@@ -1131,12 +1131,6 @@ func (c *Toomoss) RxChan() <-chan UnifiedCANMessage {
 	return c.fanout.Subscribe(c.cfg.RxBufferSize)
 }
 
-func (c *Toomoss) Context() context.Context {
-	c.lifecycle.opMu.Lock()
-	defer c.lifecycle.opMu.Unlock()
-	return c.ctx
-}
-
 func (c *Toomoss) IsFDMode() bool {
 	c.lifecycle.opMu.Lock()
 	defer c.lifecycle.opMu.Unlock()

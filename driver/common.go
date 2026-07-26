@@ -85,6 +85,11 @@ type UnifiedCANMessage struct {
 	IsFD      bool     // 标志位，用于区分是CAN还是CAN-FD消息
 }
 
+// DataLength returns the payload length represented by DLC.
+func (m UnifiedCANMessage) DataLength() int {
+	return dlcToLen(m.DLC)
+}
+
 // CANDriver 定义了CAN/CAN-FD驱动的统一接口
 type CANDriver interface {
 	Init() error
@@ -92,13 +97,7 @@ type CANDriver interface {
 	Stop()
 	Write(id int32, fd bool, data []byte) error
 	RxChan() <-chan UnifiedCANMessage
-	Context() context.Context
-}
-
-// ConfigProvider is implemented by hardware drivers that expose their
-// normalized runtime configuration.
-type ConfigProvider interface {
-	Config() Config
+	IsFDMode() bool
 }
 
 // driverLifecycle serializes initialization/cleanup and makes the read loop
@@ -158,20 +157,4 @@ func (l *driverLifecycle) cancelAndWait(cancel context.CancelFunc) bool {
 	}
 	l.readWG.Wait()
 	return wasInitialized
-}
-
-// FDModeProvider is an optional capability implemented by drivers that can
-// expose their configured CAN/CAN-FD mode.
-type FDModeProvider interface {
-	IsFDMode() bool
-}
-
-// DetectFDMode returns whether the provided driver reports FD mode and whether
-// the capability is available.
-func DetectFDMode(dev CANDriver) (isFD bool, ok bool) {
-	provider, ok := dev.(FDModeProvider)
-	if !ok {
-		return false, false
-	}
-	return provider.IsFDMode(), true
 }
