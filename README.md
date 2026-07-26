@@ -124,6 +124,25 @@ vector := driver.NewVectorWithConfig(cfg, driver.CANOEVN1640)
 auto := driver.NewAutoDriverWithConfig(cfg)
 ```
 
+对 TSMaster 而言，`cfg.Channel` 表示物理硬件通道。默认会把应用逻辑通道 CAN1 映射到设备索引 0 的该物理通道。例如只连接一个设备但使用物理 CAN4：
+
+```go
+cfg := driver.DefaultConfig(driver.CANFD, driver.CHANNEL4)
+tsmaster := driver.NewTSMasterWithConfig(cfg, driver.TC1016)
+// 映射结果：应用 CAN1 -> 设备 0 / 物理 CAN4
+```
+
+需要指定其他应用通道或第 N 个设备时，可以显式配置映射：
+
+```go
+mapping := driver.TSMasterMapping{
+	ApplicationChannel: driver.CHANNEL2,
+	HardwareIndex:      1,
+	HardwareChannel:    driver.CHANNEL4,
+}
+tsmaster := driver.NewTSMasterWithMapping(cfg, driver.TC1016, mapping)
+```
+
 `IncludeTxEcho` 默认为 `false`。抓包程序如果需要同时观察发送帧，可以显式开启；ISO-TP Adapter 始终只接收 RX 帧。
 
 `AutoDriver` 会按默认顺序探测设备，清理初始化失败或模式不匹配的候选。也可以通过 `AutoCandidate` 传入自定义顺序和设备构造参数。

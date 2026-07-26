@@ -58,3 +58,19 @@ func TestAutoDriverCleansFailuresAndRejectsModeMismatch(t *testing.T) {
 		t.Fatal("selected name was not cleared on Stop")
 	}
 }
+
+func TestTSMasterDefaultMappingSeparatesApplicationAndHardwareChannel(t *testing.T) {
+	cfg := DefaultConfig(CANFD, CHANNEL4)
+	dev := NewTSMasterWithConfig(cfg, TC1016)
+	mapping := dev.Mapping()
+
+	if mapping.ApplicationChannel != CHANNEL1 {
+		t.Fatalf("application channel = %d, want CHANNEL1", mapping.ApplicationChannel)
+	}
+	if mapping.HardwareIndex != 0 {
+		t.Fatalf("hardware index = %d, want 0", mapping.HardwareIndex)
+	}
+	if mapping.HardwareChannel != CHANNEL4 {
+		t.Fatalf("hardware channel = %d, want CHANNEL4", mapping.HardwareChannel)
+	}
+}

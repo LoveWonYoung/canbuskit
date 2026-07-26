@@ -15,7 +15,7 @@ var printLog atomic.Bool
 // constructor (for example Vector deviceType).
 type Config struct {
 	Mode            CanType
-	Channel         byte
+	Channel         byte // Physical hardware channel, zero-based.
 	NominalBitrate  uint32
 	DataBitrate     uint32
 	RxBufferSize    int

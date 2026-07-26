@@ -323,6 +323,22 @@ const (
 	tsCANPropertyExtended = 1 << 2
 )
 
+// TSMasterMapping maps one application-side logical channel to one physical
+// channel on a TSMaster hardware device. All values are zero-based.
+type TSMasterMapping struct {
+	ApplicationChannel byte
+	HardwareIndex      int
+	HardwareChannel    byte
+}
+
+func DefaultTSMasterMapping(hardwareChannel byte) TSMasterMapping {
+	return TSMasterMapping{
+		ApplicationChannel: CHANNEL1,
+		HardwareIndex:      0,
+		HardwareChannel:    hardwareChannel,
+	}
+}
+
 type TSMaster struct {
 	loader      *TSMasterLoader
 	isConnected bool
@@ -333,8 +349,11 @@ type TSMaster struct {
 	cfg         Config
 	lifecycle   driverLifecycle
 	canType     CanType
-	CANChannel  byte
-	deviceType  int
+	// CANChannel is the physical hardware channel and is kept for backwards
+	// compatibility. Internal send/receive operations use mapping.ApplicationChannel.
+	CANChannel byte
+	mapping    TSMasterMapping
+	deviceType int
 }
 
 func NewTSMaster(cantype CanType, canChannel byte, deviceType int) *TSMaster {
@@ -342,13 +361,19 @@ func NewTSMaster(cantype CanType, canChannel byte, deviceType int) *TSMaster {
 }
 
 func NewTSMasterWithConfig(cfg Config, deviceType int) *TSMaster {
+	return NewTSMasterWithMapping(cfg, deviceType, DefaultTSMasterMapping(cfg.Channel))
+}
+
+func NewTSMasterWithMapping(cfg Config, deviceType int, mapping TSMasterMapping) *TSMaster {
 	ctx, cancel := context.WithCancel(context.Background())
+	cfg.Channel = mapping.HardwareChannel
 	return &TSMaster{
 		ctx:        ctx,
 		cancel:     cancel,
 		cfg:        cfg,
 		canType:    cfg.Mode,
-		CANChannel: cfg.Channel,
+		CANChannel: mapping.HardwareChannel,
+		mapping:    mapping,
 		deviceType: deviceType,
 	}
 }
@@ -367,9 +392,13 @@ func (t *TSMaster) Init() error {
 	}
 	t.cfg = cfg
 	t.canType = cfg.Mode
-	t.CANChannel = cfg.Channel
-	if t.CANChannel >= 4 {
-		return fmt.Errorf("TSMaster channel %d out of range (0-3)", t.CANChannel)
+	t.CANChannel = t.mapping.HardwareChannel
+	t.cfg.Channel = t.mapping.HardwareChannel
+	if t.mapping.ApplicationChannel >= 32 {
+		return fmt.Errorf("TSMaster application channel %d out of range (0-31)", t.mapping.ApplicationChannel)
+	}
+	if t.mapping.HardwareIndex < 0 {
+		return fmt.Errorf("TSMaster hardware index must be >= 0: %d", t.mapping.HardwareIndex)
 	}
 
 	// 创建context和cancel函数
@@ -430,12 +459,19 @@ func (t *TSMaster) Init() error {
 	if findDevice <= 0 {
 		return cleanup(errors.New("no TSMaster devices found"))
 	}
+	if t.mapping.HardwareIndex >= int(findDevice) {
+		return cleanup(fmt.Errorf("TSMaster hardware index %d out of range; found %d device(s)", t.mapping.HardwareIndex, findDevice))
+	}
 	HardwareName, _ := syscall.BytePtrFromString("Hardware")
 	r, _, _ = t.loader.GetProcAddress("tsapp_show_tsmaster_window").Call(uintptr(unsafe.Pointer(HardwareName)), uintptr(1))
 	fmt.Printf("tsapp_show_tsmaster_window: %d\n", r)
 	// 设置CAN通道数量
-	r, _, _ = t.loader.GetProcAddress("tsapp_set_can_channel_count").Call(uintptr(4))
+	channelCount := uintptr(t.mapping.ApplicationChannel) + 1
+	r, _, _ = t.loader.GetProcAddress("tsapp_set_can_channel_count").Call(channelCount)
 	fmt.Printf("Set CAN channel count result: %d\n", r)
+	if r != 0 {
+		return cleanup(fmt.Errorf("set CAN channel count failed: %d", r))
+	}
 	devName, err := deviceNameFromType(t.deviceType)
 	if err != nil {
 		return cleanup(err)
@@ -451,19 +487,27 @@ func (t *TSMaster) Init() error {
 	// const s32 AHardwareIndex,
 	// const s32 AHardwareChannel,
 	// const bool AEnableMapping);
-	// 设置映射: APP_CAN -> TS_USB_DEVICE(3) / deviceSubType / CANChannel
+	// Map the logical application channel to the selected device/channel.
 	r, _, _ = t.loader.GetProcAddress("tsapp_set_mapping_verbose").Call(
 		uintptr(unsafe.Pointer(appName)),
-		uintptr(0),            // APP_CAN
-		uintptr(t.CANChannel), // 软件通道
+		uintptr(0),                            // APP_CAN
+		uintptr(t.mapping.ApplicationChannel), // 应用逻辑通道
 		uintptr(unsafe.Pointer(deviceName)),
-		uintptr(TS_USB_DEVICE), // TS_USB_DEVICE
-		uintptr(t.deviceType),  // 设备子类型
-		uintptr(0),             // 硬件索引
-		uintptr(t.CANChannel),  // 硬件通道
-		uintptr(1),             // 启用映射
+		uintptr(TS_USB_DEVICE),             // TS_USB_DEVICE
+		uintptr(t.deviceType),              // 设备子类型
+		uintptr(t.mapping.HardwareIndex),   // 硬件设备索引
+		uintptr(t.mapping.HardwareChannel), // 硬件物理通道
+		uintptr(1),                         // 启用映射
 	)
-	fmt.Printf("Set mapping verbose (%s/%d) result: %d\n", devName, t.deviceType, r)
+	fmt.Printf(
+		"Set mapping verbose (%s/%d app=%d hardware=%d:%d) result: %d\n",
+		devName,
+		t.deviceType,
+		t.mapping.ApplicationChannel,
+		t.mapping.HardwareIndex,
+		t.mapping.HardwareChannel,
+		r,
+	)
 	if r != 0 {
 		return cleanup(fmt.Errorf("tsapp_set_mapping_verbose failed: %d", r))
 	}
@@ -471,7 +515,7 @@ func (t *TSMaster) Init() error {
 	if t.canType == CANFD {
 		bd := float32(t.cfg.DataBitrate) / 1000
 		r, _, _ = t.loader.GetProcAddress("tsapp_configure_baudrate_canfd").Call(
-			uintptr(t.CANChannel),
+			uintptr(t.mapping.ApplicationChannel),
 			uintptr(math.Float32bits(br)),
 			uintptr(math.Float32bits(bd)),
 			uintptr(1),
@@ -481,7 +525,7 @@ func (t *TSMaster) Init() error {
 		fmt.Printf("CAN-FD bitrate configuration result: %d\n", r)
 	} else {
 		r, _, _ = t.loader.GetProcAddress("tsapp_configure_baudrate_can").Call(
-			uintptr(t.CANChannel),
+			uintptr(t.mapping.ApplicationChannel),
 			uintptr(math.Float32bits(br)),
 			uintptr(0),
 			uintptr(1),
@@ -537,7 +581,7 @@ func (t *TSMaster) readLoop() {
 			if r, _, _ := t.loader.GetProcAddress("tsfifo_receive_canfd_msgs").Call(
 				uintptr(unsafe.Pointer(&canfdMsg[0])),
 				uintptr(unsafe.Pointer(&size)),
-				uintptr(t.CANChannel),
+				uintptr(t.mapping.ApplicationChannel),
 				rxTxMode,
 			); r != 0 {
 				continue
@@ -633,7 +677,7 @@ func (t *TSMaster) Write(id int32, fd bool, data []byte) error {
 	}
 
 	var canfdMsg TLIBCANFD
-	canfdMsg.FIdxChn = t.CANChannel
+	canfdMsg.FIdxChn = t.mapping.ApplicationChannel
 	canfdMsg.FIdentifier = id
 	canfdMsg.FProperties = 1
 	canfdMsg.FDLC = dataLenToDlc(len(data))
@@ -679,4 +723,10 @@ func (t *TSMaster) Config() Config {
 	t.lifecycle.opMu.Lock()
 	defer t.lifecycle.opMu.Unlock()
 	return t.cfg
+}
+
+func (t *TSMaster) Mapping() TSMasterMapping {
+	t.lifecycle.opMu.Lock()
+	defer t.lifecycle.opMu.Unlock()
+	return t.mapping
 }
