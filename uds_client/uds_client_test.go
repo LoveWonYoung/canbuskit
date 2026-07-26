@@ -466,11 +466,7 @@ func TestNewUDSClient_AutoSyncFDMode(t *testing.T) {
 	mockDriver := NewMockCANDriver()
 	mockDriver.fdMode = true
 
-	addr, err := isotp.NewAddress(
-		isotp.Normal11Bit,
-		isotp.WithTxID(0x700),
-		isotp.WithRxID(0x708),
-	)
+	addr, err := isotp.NewAddress(0x700, 0x708)
 	if err != nil {
 		t.Fatalf("create address failed: %v", err)
 	}

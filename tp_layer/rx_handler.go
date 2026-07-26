@@ -10,7 +10,7 @@ func (t *Transport) ProcessRx(msg CanMessage, txChan chan<- CanMessage) {
 	if !t.address.IsForMe(&msg) {
 		return
 	}
-	frame, err := ParseFrame(&msg, t.address.RxPrefixSize)
+	frame, err := ParseFrame(&msg)
 	if err != nil {
 		t.fireError(fmt.Errorf("报文解析失败: %v", err))
 		return
@@ -18,7 +18,6 @@ func (t *Transport) ProcessRx(msg CanMessage, txChan chan<- CanMessage) {
 
 	switch f := frame.(type) {
 	case *FlowControlFrame:
-		t.lastFlowControlFrame = f
 		if t.rxState == StateWaitCF {
 			if f.FlowStatus == FlowStatusWait || f.FlowStatus == FlowStatusContinueToSend {
 				t.resetRxTimer()
@@ -127,7 +126,7 @@ func (t *Transport) resetRxTimer() {
 
 func (t *Transport) sendFlowControl(status FlowStatus, txChan chan<- CanMessage) {
 	payload := createFlowControlPayload(status, t.config.BlockSize, t.config.StMin)
-	msg := t.makeTxMsgWithAddr(t.address, payload, Physical) // FC should use the physical tester->ECU address.
+	msg := t.makeTxMsgWithAddr(t.address, payload)
 	select {
 	case txChan <- msg:
 	default:

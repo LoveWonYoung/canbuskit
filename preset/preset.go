@@ -23,20 +23,12 @@ type Preset struct {
 }
 
 func newPreset(drv driver.CANDriver, physId, respId, funcId uint32, fd bool) (*Preset, error) {
-	physAddr, err := tp_layer.NewAddress(
-		tp_layer.Normal11Bit,
-		tp_layer.WithTxID(physId),
-		tp_layer.WithRxID(respId),
-	)
+	physAddr, err := tp_layer.NewAddress(physId, respId)
 	if err != nil {
 		return nil, fmt.Errorf("build physical address: %w", err)
 	}
 
-	funcAddr, err := tp_layer.NewAddress(
-		tp_layer.Normal11Bit,
-		tp_layer.WithTxID(funcId),
-		tp_layer.WithRxID(respId),
-	)
+	funcAddr, err := tp_layer.NewAddress(funcId, respId)
 	if err != nil {
 		return nil, fmt.Errorf("build functional address: %w", err)
 	}

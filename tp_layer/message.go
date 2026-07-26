@@ -3,37 +3,22 @@ package tp_layer
 import (
 	"encoding/hex"
 	"fmt"
-	"strings"
 )
 
-// CanMessage 代表一个 CAN 报文 (ISO-11898)。
+// CanMessage represents a standard 11-bit CAN or CAN FD data frame.
 type CanMessage struct {
 	ArbitrationID uint32
 	Data          []byte
-	IsExtendedID  bool
 	IsFD          bool
-	BitrateSwitch bool
 }
 
 // String 方法提供了 CanMessage 的字符串表示形式。
 func (m *CanMessage) String() string {
-	var idStr string
-	if m.IsExtendedID {
-		idStr = fmt.Sprintf("%08x", m.ArbitrationID)
-	} else {
-		idStr = fmt.Sprintf("%03x", m.ArbitrationID)
-	}
+	idStr := fmt.Sprintf("%03x", m.ArbitrationID)
 	dataStr := hex.EncodeToString(m.Data)
-	var flags []string
+	flagStr := ""
 	if m.IsFD {
-		flags = append(flags, "fd")
-	}
-	if m.BitrateSwitch {
-		flags = append(flags, "bs")
-	}
-	var flagStr string
-	if len(flags) > 0 {
-		flagStr = fmt.Sprintf(" (%s)", strings.Join(flags, ","))
+		flagStr = " (fd)"
 	}
 	return fmt.Sprintf("<CanMessage %s [%d]%s \"%s\">", idStr, len(m.Data), flagStr, dataStr)
 }

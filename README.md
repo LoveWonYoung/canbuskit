@@ -68,11 +68,7 @@ import (
 func main() {
 	dev := driver.NewToomoss(driver.CANFD, driver.CHANNEL1)
 
-	addr, err := isotp.NewAddress(
-		isotp.Normal11Bit,
-		isotp.WithTxID(0x7C6),
-		isotp.WithRxID(0x7C7),
-	)
+	addr, err := isotp.NewAddress(0x7C6, 0x7C7)
 	if err != nil {
 		log.Fatal(err)
 	}
@@ -149,15 +145,13 @@ tsmaster := driver.NewTSMasterWithMapping(cfg, driver.TC1016, mapping)
 
 ## 寻址与 ISO-TP 配置
 
-`tp_layer` 支持多种寻址模式：
+Lite 版只支持标准 11 位 CAN ID 的普通寻址。创建连接时直接传入发送 ID 和接收 ID：
 
-- `Normal11Bit`
-- `Normal29Bit`
-- `NormalFixed29Bit`
-- `Extended11Bit`
-- `Extended29Bit`
-- `Mixed11Bit`
-- `Mixed29Bit`
+```go
+addr, err := isotp.NewAddress(0x7C6, 0x7C7)
+```
+
+`0x800` 及以上的扩展 ID 会在创建地址时被拒绝。远程帧、错误帧和发送回显不会进入 ISO-TP 接收链路。
 
 基础配置来自：
 
@@ -168,8 +162,8 @@ cfg := isotp.DefaultConfig()
 你可以按需覆盖：
 
 - `PaddingByte`
-- `TimeoutN_As / N_Bs / N_Cs`
-- `TimeoutN_Ar / N_Br / N_Cr`
+- `TimeoutN_Bs`（等待流控帧）
+- `TimeoutN_Cr`（等待连续帧）
 - `BlockSize`
 - `StMin`
 

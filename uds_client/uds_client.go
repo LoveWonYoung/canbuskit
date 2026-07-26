@@ -16,7 +16,6 @@ import (
 // 这允许我们在测试中注入 Mock 对象
 type Transport interface {
 	Send(data []byte)
-	Recv() ([]byte, bool)
 	RecvChan() <-chan []byte
 	SetTxAddress(addr *isotp.Address)
 	SetFDMode(isFD bool)
@@ -247,6 +246,10 @@ type UDSClient struct {
 
 // NewUDSClient 是新的构造函数，负责完成所有组件的初始化和连接。
 func NewUDSClient(dev driver.CANDriver, addr *isotp.Address, cfg isotp.Config) (*UDSClient, error) {
+	if err := addr.Validate(); err != nil {
+		return nil, fmt.Errorf("invalid ISO-TP address: %w", err)
+	}
+
 	// 1. 初始化适配器并启动硬件驱动
 	adapter, err := driver.NewAdapter(dev)
 	if err != nil {
@@ -346,8 +349,8 @@ func newUDSClient(adapter *driver.Adapter, stack Transport) *UDSClient {
 
 // SetFunctionalAddress sets the functional address used when AddressFunctional is active.
 func (c *UDSClient) SetFunctionalAddress(addr *isotp.Address) error {
-	if addr == nil {
-		return errors.New("functional address cannot be nil")
+	if err := addr.Validate(); err != nil {
+		return fmt.Errorf("invalid functional address: %w", err)
 	}
 	c.reqMu.Lock()
 	defer c.reqMu.Unlock()

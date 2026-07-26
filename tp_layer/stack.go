@@ -23,16 +23,14 @@ type Transport struct {
 	rxDataChan chan []byte
 	txDataChan chan []byte
 
-	rxFrameLen           int
-	txFrameLen           int
-	rxSeqNum             int
-	txSeqNum             int
-	rxBlockCounter       int
-	txBlockCounter       int
-	remoteBlocksize      int
-	remoteStmin          time.Duration
-	lastFlowControlFrame *FlowControlFrame
-	pendingFlowControlTx bool
+	rxFrameLen      int
+	txFrameLen      int
+	rxSeqNum        int
+	txSeqNum        int
+	rxBlockCounter  int
+	txBlockCounter  int
+	remoteBlockSize int
+	remoteSTmin     time.Duration
 
 	// Native timers
 	timerRxCF    *time.Timer
@@ -41,9 +39,6 @@ type Transport struct {
 
 	// Configuration
 	config Config
-
-	// Runtime State
-	wftCounter int
 
 	// Error Channel
 	ErrorChan chan error
@@ -136,7 +131,7 @@ func (t *Transport) Run(ctx context.Context, rxChan <-chan CanMessage, txChan ch
 			if !ok {
 				return
 			}
-			t.startTransmission(data, txChan)
+			t.initiateTx(data, txChan)
 		case <-t.timerRxCF.C:
 			fmt.Println("接收连续帧超时，重置接收状态。")
 			t.stopReceiving()
@@ -152,56 +147,10 @@ func (t *Transport) Run(ctx context.Context, rxChan <-chan CanMessage, txChan ch
 	}
 }
 
-// RunOptimized is the loop with proper state handling
-func (t *Transport) RunEventLoop(ctx context.Context, rxChan <-chan CanMessage, txChan chan<- CanMessage) {
-	defer t.cleanup()
-
-	for {
-		var txDataEnable <-chan []byte
-		if t.txState == StateIdle {
-			txDataEnable = t.txDataChan
-		}
-
-		select {
-		case <-ctx.Done():
-			return
-
-		case msg, ok := <-rxChan:
-			if !ok {
-				return
-			}
-			t.ProcessRx(msg, txChan)
-
-		case data, ok := <-txDataEnable:
-			if !ok {
-				return
-			}
-			t.startTransmission(data, txChan)
-
-		case <-t.timerRxCF.C:
-			fmt.Println("接收连续帧超时，重置接收状态。")
-			t.stopReceiving()
-
-		case <-t.timerRxFC.C:
-			fmt.Println("等待流控帧超时，停止发送。")
-			t.stopSending()
-
-		case <-t.timerTxSTmin.C:
-			if t.txState == StateTransmit {
-				t.handleTxTransmit(txChan)
-			}
-		}
-	}
-}
-
 func (t *Transport) cleanup() {
 	t.timerRxCF.Stop()
 	t.timerRxFC.Stop()
 	t.timerTxSTmin.Stop()
-}
-
-func (t *Transport) startTransmission(data []byte, txChan chan<- CanMessage) {
-	t.initiateTx(data, txChan)
 }
 
 // Internal helpers
@@ -239,26 +188,22 @@ func (t *Transport) stopSending() {
 	}
 }
 
-func (t *Transport) makeTxMsg(data []byte, addrType AddressType) CanMessage {
+func (t *Transport) makeTxMsg(data []byte) CanMessage {
 	t.mu.RLock()
 	addr := t.txAddress
 	if addr == nil {
 		addr = t.address
 	}
 	t.mu.RUnlock()
-	return t.makeTxMsgWithAddr(addr, data, addrType)
+	return t.makeTxMsgWithAddr(addr, data)
 }
 
-func (t *Transport) makeTxMsgWithAddr(addr *Address, data []byte, addrType AddressType) CanMessage {
+func (t *Transport) makeTxMsgWithAddr(addr *Address, data []byte) CanMessage {
 	t.mu.RLock()
 	isFD := t.IsFD
 	t.mu.RUnlock()
 
-	arbitrationID := addr.GetTxArbitrationID(addrType)
-	prefixLen := len(addr.TxPayloadPrefix)
-	fullPayload := make([]byte, prefixLen+len(data))
-	copy(fullPayload, addr.TxPayloadPrefix)
-	copy(fullPayload[prefixLen:], data)
+	fullPayload := append([]byte(nil), data...)
 
 	// Padding
 	if t.config.PaddingByte != nil {
@@ -277,9 +222,8 @@ func (t *Transport) makeTxMsgWithAddr(addr *Address, data []byte, addrType Addre
 	}
 
 	return CanMessage{
-		ArbitrationID: arbitrationID,
+		ArbitrationID: addr.TxID,
 		Data:          fullPayload,
-		IsExtendedID:  addr.Is29Bit(),
 		IsFD:          isFD,
 	}
 }

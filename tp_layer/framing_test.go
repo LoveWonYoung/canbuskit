@@ -311,7 +311,7 @@ func TestParseFrame_SingleFrame(t *testing.T) {
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
 			msg := &CanMessage{ArbitrationID: 0x7C7, Data: tc.data}
-			frame, err := ParseFrame(msg, 0)
+			frame, err := ParseFrame(msg)
 			if err != nil {
 				t.Fatalf("解析单帧失败: %v", err)
 			}
@@ -354,7 +354,7 @@ func TestParseFrame_FirstFrame(t *testing.T) {
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
 			msg := &CanMessage{ArbitrationID: 0x7C7, Data: tc.data}
-			frame, err := ParseFrame(msg, 0)
+			frame, err := ParseFrame(msg)
 			if err != nil {
 				t.Fatalf("解析首帧失败: %v", err)
 			}
@@ -377,7 +377,7 @@ func TestParseFrame_ConsecutiveFrame(t *testing.T) {
 	data := []byte{0x21, 0x01, 0x02, 0x03, 0x04, 0x05, 0x06, 0x07}
 	msg := &CanMessage{ArbitrationID: 0x7C7, Data: data}
 
-	frame, err := ParseFrame(msg, 0)
+	frame, err := ParseFrame(msg)
 	if err != nil {
 		t.Fatalf("解析连续帧失败: %v", err)
 	}
@@ -432,7 +432,7 @@ func TestParseFrame_FlowControl(t *testing.T) {
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
 			msg := &CanMessage{ArbitrationID: 0x747, Data: tc.data}
-			frame, err := ParseFrame(msg, 0)
+			frame, err := ParseFrame(msg)
 			if err != nil {
 				t.Fatalf("解析流控帧失败: %v", err)
 			}
@@ -450,28 +450,6 @@ func TestParseFrame_FlowControl(t *testing.T) {
 				t.Errorf("STmin不匹配: 期望=%v, 实际=%v", tc.expectedSTmin, fc.STmin)
 			}
 		})
-	}
-}
-
-// TestParseFrame_WithPrefix 测试带前缀的帧解析 (扩展地址模式)
-func TestParseFrame_WithPrefix(t *testing.T) {
-	// 带1字节地址前缀的单帧
-	data := []byte{0x55, 0x03, 0x22, 0xF1, 0x90, 0x00, 0x00, 0x00} // 0x55是地址前缀
-	msg := &CanMessage{ArbitrationID: 0x7C7, Data: data}
-
-	frame, err := ParseFrame(msg, 1) // 前缀长度为1
-	if err != nil {
-		t.Fatalf("解析带前缀的帧失败: %v", err)
-	}
-
-	sf, ok := frame.(*SingleFrame)
-	if !ok {
-		t.Fatal("应该解析为 SingleFrame")
-	}
-
-	expectedData := []byte{0x22, 0xF1, 0x90}
-	if !bytes.Equal(sf.Data, expectedData) {
-		t.Errorf("数据不匹配\n期望: % 02X\n实际: % 02X", expectedData, sf.Data)
 	}
 }
 
@@ -620,7 +598,7 @@ func BenchmarkParseFrame_SingleFrame(b *testing.B) {
 	}
 	b.ResetTimer()
 	for i := 0; i < b.N; i++ {
-		_, _ = ParseFrame(msg, 0)
+		_, _ = ParseFrame(msg)
 	}
 }
 

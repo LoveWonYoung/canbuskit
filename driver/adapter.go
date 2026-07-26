@@ -92,9 +92,7 @@ func (t *Adapter) convertRXMessage(receivedMsg UnifiedCANMessage, ok bool) (tp_l
 	isotpMsg := tp_layer.CanMessage{
 		ArbitrationID: receivedMsg.ID,
 		Data:          receivedMsg.Data[:payloadLength],
-		IsExtendedID:  false,
 		IsFD:          receivedMsg.IsFD,
-		BitrateSwitch: false,
 	}
 
 	return isotpMsg, true
