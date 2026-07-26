@@ -42,8 +42,26 @@ var (
 	DevHandle [10]int
 	DEVIndex  = 0
 
-	toomossMu sync.Mutex
+	toomossMu        sync.Mutex
+	toomossSessionMu sync.Mutex
+	toomossInUse     bool
 )
+
+func acquireToomossSession() bool {
+	toomossSessionMu.Lock()
+	defer toomossSessionMu.Unlock()
+	if toomossInUse {
+		return false
+	}
+	toomossInUse = true
+	return true
+}
+
+func releaseToomossSession() {
+	toomossSessionMu.Lock()
+	toomossInUse = false
+	toomossSessionMu.Unlock()
+}
 
 func toomossReady() bool {
 	return UsbDeviceDLL != 0 &&
@@ -557,26 +575,31 @@ func defaultCANFDInitConfig() CANFD_INIT_CONFIG {
 }
 
 type Toomoss struct {
-	rxChan           chan UnifiedCANMessage
-	fanout           *rxFanout
-	ctx              context.Context
-	cancel           context.CancelFunc
-	canType          CanType
-	CANChannel       byte
-	legacyCAN        bool
-	canFDInitConfig  CANFD_INIT_CONFIG
+	rxChan          chan UnifiedCANMessage
+	fanout          *rxFanout
+	ctx             context.Context
+	cancel          context.CancelFunc
+	cfg             Config
+	lifecycle       driverLifecycle
+	canType         CanType
+	CANChannel      byte
+	legacyCAN       bool
+	canFDInitConfig CANFD_INIT_CONFIG
+	ownsDevice      bool
 }
 
 func NewToomoss(canType CanType, canChannel byte) *Toomoss {
-	rxChan := make(chan UnifiedCANMessage, RxChannelBufferSize)
+	return NewToomossWithConfig(DefaultConfig(canType, canChannel))
+}
+
+func NewToomossWithConfig(cfg Config) *Toomoss {
 	ctx, cancel := context.WithCancel(context.Background())
 	return &Toomoss{
-		rxChan:          rxChan,
-		fanout:          newRxFanout(ctx, rxChan),
 		ctx:             ctx,
 		cancel:          cancel,
-		canType:         canType,
-		CANChannel:      canChannel,
+		cfg:             cfg,
+		canType:         cfg.Mode,
+		CANChannel:      cfg.Channel,
 		canFDInitConfig: defaultCANFDInitConfig(),
 	}
 }
@@ -618,31 +641,71 @@ func toomossDLCToDataLen(rawDLC byte, isFD bool) int {
 }
 
 func (c *Toomoss) Init() error {
+	c.lifecycle.opMu.Lock()
+	defer c.lifecycle.opMu.Unlock()
+	if c.lifecycle.isInitialized() {
+		return nil
+	}
+	cfg, err := normalizeConfig(c.cfg)
+	if err != nil {
+		return err
+	}
+	c.cfg = cfg
+	c.canType = cfg.Mode
+	c.CANChannel = cfg.Channel
+	c.legacyCAN = false
+
+	if !acquireToomossSession() {
+		return errors.New("another Toomoss driver instance is already using the device")
+	}
+	c.ownsDevice = true
+	opened := false
+	cleanup := func(err error) error {
+		if opened {
+			_ = usbClose()
+		}
+		if c.ownsDevice {
+			releaseToomossSession()
+			c.ownsDevice = false
+		}
+		return err
+	}
+
 	if err := ensureToomossLoaded(); err != nil {
-		return fmt.Errorf("failed to load Toomoss DLLs: %w", err)
+		return cleanup(fmt.Errorf("failed to load Toomoss DLLs: %w", err))
 	}
 	if ok, err := usbScan(); err != nil {
-		return fmt.Errorf("USB scan failed: %w", err)
+		return cleanup(fmt.Errorf("USB scan failed: %w", err))
 	} else if !ok {
-		return errors.New("USB scan failed: device not found")
+		return cleanup(errors.New("USB scan failed: device not found"))
 	}
 	if ok, err := usbOpen(); err != nil {
-		return fmt.Errorf("USB open failed: %w", err)
+		return cleanup(fmt.Errorf("USB open failed: %w", err))
 	} else if !ok {
-		return errors.New("USB open failed")
+		return cleanup(errors.New("USB open failed"))
+	}
+	opened = true
+	fallback := func(fdErr error) error {
+		if err := c.fallbackToLegacyCAN(fdErr); err != nil {
+			return cleanup(err)
+		}
+		c.prepareRuntime()
+		c.lifecycle.markInitialized()
+		return nil
 	}
 
 	if c.canType == CAN {
 		c.legacyCAN = true
 		log.Println("Toomoss forced classic CAN mode")
 		if err := c.initLegacyCANDevice(); err != nil {
-			_ = usbClose()
-			return err
+			return cleanup(err)
 		}
+		c.prepareRuntime()
+		c.lifecycle.markInitialized()
 		return nil
 	}
 	if CANFD_GetCANSpeedArg == 0 || CANFDInit == 0 || CANFDStartGetMsg == 0 || CANFD_GetMsg == 0 || CANFD_SendMsg == 0 {
-		return c.fallbackToLegacyCAN(errors.New("CAN-FD APIs are not available in USB2XXX.dll"))
+		return fallback(errors.New("CAN-FD APIs are not available in USB2XXX.dll"))
 	}
 
 	canFDInitConfig := c.canFDInitConfig
@@ -650,11 +713,11 @@ func (c *Toomoss) Init() error {
 		CANFD_GetCANSpeedArg,
 		uintptr(DevHandle[DEVIndex]),
 		uintptr(unsafe.Pointer(&canFDInitConfig)),
-		uintptr(SpeedBpsNBT),
-		uintptr(SpeedBpsDBT),
+		uintptr(c.cfg.NominalBitrate),
+		uintptr(c.cfg.DataBitrate),
 	)
 	if callErr != 0 {
-		return c.fallbackToLegacyCAN(fmt.Errorf("CANFD_GetCANSpeedArg syscall failed: %w", callErr))
+		return fallback(fmt.Errorf("CANFD_GetCANSpeedArg syscall failed: %w", callErr))
 	}
 	canfdInit, _, callErr := syscall.SyscallN(
 		CANFDInit,
@@ -663,7 +726,7 @@ func (c *Toomoss) Init() error {
 		uintptr(unsafe.Pointer(&canFDInitConfig)),
 	)
 	if callErr != 0 {
-		return c.fallbackToLegacyCAN(fmt.Errorf("CANFD_Init syscall failed: %w", callErr))
+		return fallback(fmt.Errorf("CANFD_Init syscall failed: %w", callErr))
 	}
 	fdStart, _, callErr := syscall.SyscallN(
 		CANFDStartGetMsg,
@@ -671,22 +734,30 @@ func (c *Toomoss) Init() error {
 		uintptr(c.CANChannel),
 	)
 	if callErr != 0 {
-		return c.fallbackToLegacyCAN(fmt.Errorf("CANFD_StartGetMsg syscall failed: %w", callErr))
+		return fallback(fmt.Errorf("CANFD_StartGetMsg syscall failed: %w", callErr))
 	}
 	time.Sleep(InitDelay)
 	if !(canfdInit == 0 && fdStart == 0 && fdSpeed == 0) {
-		return c.fallbackToLegacyCAN(fmt.Errorf("CAN-FD initialization failed: CANFD_Init=%d, CANFD_StartGetMsg=%d, CANFD_GetCANSpeedArg=%d", canfdInit, fdStart, fdSpeed))
+		return fallback(fmt.Errorf("CAN-FD initialization failed: CANFD_Init=%d, CANFD_StartGetMsg=%d, CANFD_GetCANSpeedArg=%d", canfdInit, fdStart, fdSpeed))
 	}
+	c.prepareRuntime()
+	c.lifecycle.markInitialized()
 	log.Println("CAN硬件初始化成功。")
 	return nil
+}
+
+func (c *Toomoss) prepareRuntime() {
+	c.ctx, c.cancel = context.WithCancel(context.Background())
+	c.rxChan = make(chan UnifiedCANMessage, c.cfg.RxBufferSize)
+	c.fanout = newRxFanout(c.ctx, c.rxChan)
 }
 
 func (c *Toomoss) fallbackToLegacyCAN(fdErr error) error {
 	log.Printf("Toomoss CAN-FD initialization failed, fallback to classic CAN: %v", fdErr)
 	c.legacyCAN = true
 	c.canType = CAN
+	c.cfg.Mode = CAN
 	if err := c.initLegacyCANDevice(); err != nil {
-		_ = usbClose()
 		return fmt.Errorf("CAN-FD initialization failed (%v), fallback classic CAN initialization failed: %w", fdErr, err)
 	}
 	return nil
@@ -713,7 +784,7 @@ func (c *Toomoss) initLegacyCANDevice() error {
 		CANGetCANSpeedArg,
 		uintptr(DevHandle[DEVIndex]),
 		uintptr(unsafe.Pointer(&canInitConfig)),
-		uintptr(SpeedBpsNBT),
+		uintptr(c.cfg.NominalBitrate),
 	)
 	if callErr != 0 {
 		return fmt.Errorf("CAN_GetCANSpeedArg syscall failed: %w", callErr)
@@ -748,24 +819,44 @@ func (c *Toomoss) initLegacyCANDevice() error {
 }
 
 func (c *Toomoss) Start() {
-	log.Println("CAN-FD驱动的中央读取服务已启动...")
+	c.lifecycle.opMu.Lock()
+	defer c.lifecycle.opMu.Unlock()
+	if !c.lifecycle.isInitialized() {
+		log.Println("Toomoss start called before successful initialization")
+		return
+	}
 	c.drainInitialBuffer()
-	go c.readLoop()
+	if c.lifecycle.start(c.readLoop) {
+		log.Println("CAN驱动的中央读取服务已启动...")
+	}
 }
 
 func (c *Toomoss) Stop() {
+	c.lifecycle.opMu.Lock()
+	defer c.lifecycle.opMu.Unlock()
 	log.Println("正在停止CAN-FD驱动的读取服务...")
-	c.cancel()
+	wasInitialized := c.lifecycle.cancelAndWait(c.cancel)
 	if c.fanout != nil {
 		c.fanout.Close()
+		c.fanout = nil
 	}
-	if err := usbClose(); err != nil {
-		log.Printf("警告: USB关闭失败: %v", err)
+	if wasInitialized {
+		if err := usbClose(); err != nil {
+			log.Printf("警告: USB关闭失败: %v", err)
+		}
+	}
+	if c.rxChan != nil {
+		close(c.rxChan)
+		c.rxChan = nil
+	}
+	if c.ownsDevice {
+		releaseToomossSession()
+		c.ownsDevice = false
 	}
 }
 
 func (c *Toomoss) readLoop() {
-	ticker := time.NewTicker(PollingInterval)
+	ticker := time.NewTicker(c.cfg.PollingInterval)
 	defer ticker.Stop()
 	var canMsg [MsgBufferSize]CAN_MSG
 	var canFDMsg [MsgBufferSize]CANFD_MSG
@@ -792,11 +883,11 @@ func (c *Toomoss) readLoop() {
 
 			for i := 0; i < int(getCanFDMsgNum); i++ {
 				msg := canFDMsg[i]
-				isFD := msg.Flags&CANFD_MSG_FLAG_FDF != 0
-				actualLen := toomossDLCToDataLen(msg.DLC, isFD)
-				if actualLen == 0 {
+				if msg.ID > toomossCANFDIDMaskStandard {
 					continue
 				}
+				isFD := msg.Flags&CANFD_MSG_FLAG_FDF != 0
+				actualLen := toomossDLCToDataLen(msg.DLC, isFD)
 				normalizedDLC := dataLenToDlc(actualLen)
 				unifiedMsg := UnifiedCANMessage{
 					Direction: RX, ID: msg.ID, DLC: normalizedDLC, Data: msg.Data, IsFD: isFD,
@@ -839,26 +930,34 @@ func (c *Toomoss) readClassicBurst(canMsg *[MsgBufferSize]CAN_MSG) {
 	for i := 0; i < int(getCANMsgNum); i++ {
 		msg := canMsg[i]
 		_, remote, extended, errorFrame, txEcho := decodeToomossClassicFlags(msg.RemoteFlag, msg.ExternFlag)
-		if errorFrame || txEcho {
+		if errorFrame {
 			continue
+		}
+		if extended {
+			continue
+		}
+		if remote {
+			continue
+		}
+		direction := RX
+		if txEcho {
+			if !c.cfg.IncludeTxEcho {
+				continue
+			}
+			direction = TX
 		}
 		actualLen := int(msg.DataLen)
 		if actualLen > len(msg.Data) {
 			actualLen = len(msg.Data)
 		}
-		id := uint32(msg.ID)
-		if extended {
-			id &= toomossCANFDIDMaskExtended
-		} else {
-			id &= toomossCANFDIDMaskStandard
-		}
+		id := uint32(msg.ID) & toomossCANFDIDMaskStandard
 
 		var data [64]byte
-		if !remote && actualLen > 0 {
+		if actualLen > 0 {
 			copy(data[:], msg.Data[:actualLen])
 		}
 		unifiedMsg := UnifiedCANMessage{
-			Direction: RX,
+			Direction: direction,
 			ID:        id,
 			DLC:       dataLenToDlc(actualLen),
 			Data:      data,
@@ -877,7 +976,7 @@ func (c *Toomoss) readClassicBurst(canMsg *[MsgBufferSize]CAN_MSG) {
 func (c *Toomoss) drainInitialBuffer() {
 	if c.legacyCAN {
 		var canMsg [MsgBufferSize]CAN_MSG
-		for {
+		for batch := 0; batch < 16; batch++ {
 			n, _, _ := syscall.SyscallN(
 				CANGetMsg,
 				uintptr(DevHandle[DEVIndex]),
@@ -885,14 +984,15 @@ func (c *Toomoss) drainInitialBuffer() {
 				uintptr(unsafe.Pointer(&canMsg[0])),
 			)
 			if int(n) <= 0 {
-				break
+				return
 			}
 		}
+		log.Println("Toomoss initial classic CAN queue still contains frames after 16 batches")
 		return
 	}
 
 	var canFDMsg [MsgBufferSize]CANFD_MSG
-	for {
+	for batch := 0; batch < 16; batch++ {
 		n, _, _ := syscall.SyscallN(
 			CANFD_GetMsg,
 			uintptr(DevHandle[DEVIndex]),
@@ -901,23 +1001,23 @@ func (c *Toomoss) drainInitialBuffer() {
 			uintptr(len(canFDMsg)),
 		)
 		if int(n) <= 0 {
-			break
+			return
 		}
 	}
+	log.Println("Toomoss initial CAN-FD queue still contains frames after 16 batches")
 }
 
 func (c *Toomoss) Write(id int32, fd bool, data []byte) error {
-	if len(data) == 0 {
-		return fmt.Errorf("数据长度 %d ", len(data))
+	c.lifecycle.opMu.Lock()
+	defer c.lifecycle.opMu.Unlock()
+	if !c.lifecycle.isInitialized() {
+		return errors.New("Toomoss driver is not initialized")
+	}
+	if err := validateWrite(c.cfg, id, fd, data); err != nil {
+		return err
 	}
 	if c.legacyCAN {
 		return c.writeClassicCAN(id, fd, data)
-	}
-	if fd && len(data) > 64 {
-		return fmt.Errorf("数据长度 %d 超过CAN-FD最大长度64", len(data))
-	}
-	if !fd && len(data) > 8 {
-		return fmt.Errorf("数据长度 %d 超过CAN最大长度8", len(data))
 	}
 
 	var canFDMsg [1]CANFD_MSG
@@ -956,10 +1056,12 @@ func (c *Toomoss) Write(id int32, fd bool, data []byte) error {
 		}
 
 		logCANMessage("TX", uint32(id), normalizedDLC, canFDMsg[0].Data[:len(data)], logType)
-		select {
-		case c.rxChan <- unifiedMsg:
-		default:
-			log.Println("警告: 驱动接收channel(FD)已满，消息被丢弃")
+		if c.cfg.IncludeTxEcho {
+			select {
+			case c.rxChan <- unifiedMsg:
+			default:
+				log.Println("警告: 驱动接收channel(FD)已满，消息被丢弃")
+			}
 		}
 	} else {
 		log.Printf("错误: CAN/CANFD消息发送失败, ID=0x%03X", id)
@@ -1010,23 +1112,39 @@ func (c *Toomoss) writeClassicCAN(id int32, fd bool, data []byte) error {
 		IsFD:      false,
 	}
 	logCANMessage("TX", canID, unifiedMsg.DLC, data, CAN)
-	select {
-	case c.rxChan <- unifiedMsg:
-	default:
-		log.Println("Warning: CAN receive channel is full, dropping TX echo")
+	if c.cfg.IncludeTxEcho {
+		select {
+		case c.rxChan <- unifiedMsg:
+		default:
+			log.Println("Warning: CAN receive channel is full, dropping TX echo")
+		}
 	}
 	return nil
 }
 
 func (c *Toomoss) RxChan() <-chan UnifiedCANMessage {
+	c.lifecycle.opMu.Lock()
+	defer c.lifecycle.opMu.Unlock()
 	if c.fanout == nil {
 		return nil
 	}
-	return c.fanout.Subscribe(RxChannelBufferSize)
+	return c.fanout.Subscribe(c.cfg.RxBufferSize)
 }
 
-func (c *Toomoss) Context() context.Context { return c.ctx }
+func (c *Toomoss) Context() context.Context {
+	c.lifecycle.opMu.Lock()
+	defer c.lifecycle.opMu.Unlock()
+	return c.ctx
+}
 
 func (c *Toomoss) IsFDMode() bool {
+	c.lifecycle.opMu.Lock()
+	defer c.lifecycle.opMu.Unlock()
 	return c.canType == CANFD
+}
+
+func (c *Toomoss) Config() Config {
+	c.lifecycle.opMu.Lock()
+	defer c.lifecycle.opMu.Unlock()
+	return c.cfg
 }

@@ -75,6 +75,14 @@ func (t *Adapter) convertRXMessage(receivedMsg UnifiedCANMessage, ok bool) (tp_l
 	if !ok {
 		return tp_layer.CanMessage{}, false
 	}
+	// TX echoes are useful to raw bus monitors but must never be fed back into
+	// the ISO-TP receive path.
+	if receivedMsg.Direction == TX {
+		return tp_layer.CanMessage{}, false
+	}
+	if receivedMsg.ID > 0x7FF {
+		return tp_layer.CanMessage{}, false
+	}
 	payloadLength := dlcToLen(receivedMsg.DLC)
 	if payloadLength > len(receivedMsg.Data) {
 		log.Printf("警告: 收到的报文DLC (%d) 大于数据数组长度 (%d)。ID: 0x%X", receivedMsg.DLC, len(receivedMsg.Data), receivedMsg.ID)

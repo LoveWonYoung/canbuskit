@@ -10,6 +10,8 @@
 
 项目适合做 ECU 诊断、刷写、自动化测试，以及把不同 CAN 硬件接入统一的 Go 接口。
 
+当前硬件驱动统一支持标准 11 位 ID 的 CAN / CAN FD 数据帧；29 位扩展帧不在驱动层支持范围内。
+
 ## 模块结构
 
 仓库主要分成四层：
@@ -98,6 +100,33 @@ func main() {
 ```go
 dev := driver.NewAutoDriver(driver.CANFD)
 ```
+
+### 驱动配置
+
+旧构造函数默认使用通道 1、500 kbit/s 仲裁速率、2 Mbit/s 数据速率。需要自定义时，可以使用统一的 `driver.Config`：
+
+```go
+cfg := driver.DefaultConfig(driver.CANFD, driver.CHANNEL2)
+cfg.NominalBitrate = 500_000
+cfg.DataBitrate = 4_000_000
+cfg.RxBufferSize = 4096
+cfg.PollingInterval = 500 * time.Microsecond
+
+dev := driver.NewToomossWithConfig(cfg)
+```
+
+Windows 下的其他驱动对应使用：
+
+```go
+pcan := driver.NewPCANWithConfig(cfg)
+tsmaster := driver.NewTSMasterWithConfig(cfg, driver.TC1016)
+vector := driver.NewVectorWithConfig(cfg, driver.CANOEVN1640)
+auto := driver.NewAutoDriverWithConfig(cfg)
+```
+
+`IncludeTxEcho` 默认为 `false`。抓包程序如果需要同时观察发送帧，可以显式开启；ISO-TP Adapter 始终只接收 RX 帧。
+
+`AutoDriver` 会按默认顺序探测设备，清理初始化失败或模式不匹配的候选。也可以通过 `AutoCandidate` 传入自定义顺序和设备构造参数。
 
 ## 寻址与 ISO-TP 配置
 
@@ -244,6 +273,7 @@ if err != nil {
 ## 注意事项
 
 - `driver` 层只提供统一的 `Write(id, fd, data)` 能力，通过 `fd` 标志在同一函数里发送 CAN / CAN-FD。
+- 驱动层只接受 `0x000-0x7FF` 的标准 11 位 CAN ID。
 - `services` 只封装了部分常见 UDS 服务；其他服务建议直接用 `UDSClient.Request(...)`。
 - `UDSClient.Close()` 会同时关闭后台 goroutine 和底层设备连接，使用结束后应主动调用。
 

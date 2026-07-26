@@ -11,16 +11,49 @@ import (
 	"sync"
 )
 
-// AutoDriver selects the first available CAN device driver.
-// Order: Toomoss -> TSMaster -> PCAN -> Vector.
+type DriverFactory func(Config) CANDriver
+
+// AutoCandidate describes one backend considered by AutoDriver.
+type AutoCandidate struct {
+	Name string
+	New  DriverFactory
+}
+
+// DefaultAutoCandidates returns the default backend priority.
+func DefaultAutoCandidates() []AutoCandidate {
+	return []AutoCandidate{
+		{Name: "Toomoss", New: func(cfg Config) CANDriver { return NewToomossWithConfig(cfg) }},
+		{Name: "TSMaster", New: func(cfg Config) CANDriver { return NewTSMasterWithConfig(cfg, TC1016) }},
+		{Name: "PCAN", New: func(cfg Config) CANDriver { return NewPCANWithConfig(cfg) }},
+		{Name: "Vector", New: func(cfg Config) CANDriver { return NewVectorWithConfig(cfg, CANOEVN1640) }},
+	}
+}
+
+// AutoDriver selects the first available, mode-compatible CAN device driver.
 type AutoDriver struct {
-	canType CanType
-	mu      sync.Mutex
-	driver  CANDriver
+	canType      CanType
+	cfg          Config
+	candidates   []AutoCandidate
+	mu           sync.Mutex
+	driver       CANDriver
+	selectedName string
 }
 
 func NewAutoDriver(canType CanType) *AutoDriver {
-	return &AutoDriver{canType: canType}
+	return NewAutoDriverWithConfig(DefaultConfig(canType, CHANNEL1))
+}
+
+// NewAutoDriverWithConfig creates an automatic driver selector. If no
+// candidates are supplied, DefaultAutoCandidates is used.
+func NewAutoDriverWithConfig(cfg Config, candidates ...AutoCandidate) *AutoDriver {
+	if len(candidates) == 0 {
+		candidates = DefaultAutoCandidates()
+	}
+	return &AutoDriver{
+		canType:    cfg.Mode,
+		cfg:        cfg,
+		candidates: append([]AutoCandidate(nil), candidates...),
+	}
 }
 
 func (a *AutoDriver) Init() error {
@@ -30,26 +63,43 @@ func (a *AutoDriver) Init() error {
 	if a.driver != nil {
 		return nil
 	}
-	candidates := []struct {
-		name   string
-		driver CANDriver
-	}{
-		{name: "Toomoss CAN 1 500K 2M", driver: NewToomoss(a.canType, CHANNEL1)},
-		{name: "TSMaster CAN 1 500K 2M", driver: NewTSMaster(a.canType, CHANNEL1, TC1016)},
-		{name: "PCAN CAN 1 500K 2M", driver: NewPCAN(a.canType, CHANNEL1)},
-		{name: "Vector", driver: NewVector(a.canType, CANOEVN1640, CHANNEL4)},
+	cfg, err := normalizeConfig(a.cfg)
+	if err != nil {
+		return err
 	}
+	a.cfg = cfg
+	a.canType = cfg.Mode
 
 	var errs []string
-	for _, candidate := range candidates {
-		if err := candidate.driver.Init(); err == nil {
-			a.driver = candidate.driver
-			log.Printf("Auto driver selected: %s", candidate.name)
-			return nil
-		} else {
-			log.Printf("Auto driver: %s init failed: %v", candidate.name, err)
-			errs = append(errs, fmt.Sprintf("%s: %v", strings.ToLower(candidate.name), err))
+	for _, candidate := range a.candidates {
+		if candidate.New == nil {
+			errs = append(errs, fmt.Sprintf("%s: candidate factory is nil", strings.ToLower(candidate.Name)))
+			continue
 		}
+		dev := candidate.New(cfg)
+		if dev == nil {
+			errs = append(errs, fmt.Sprintf("%s: candidate returned nil driver", strings.ToLower(candidate.Name)))
+			continue
+		}
+		if err := dev.Init(); err != nil {
+			dev.Stop()
+			log.Printf("Auto driver: %s init failed: %v", candidate.Name, err)
+			errs = append(errs, fmt.Sprintf("%s: %v", strings.ToLower(candidate.Name), err))
+			continue
+		}
+		isFD, ok := DetectFDMode(dev)
+		wantFD := cfg.Mode == CANFD
+		if !ok || isFD != wantFD {
+			dev.Stop()
+			err := fmt.Errorf("initialized in incompatible mode (want CAN-FD=%t, got CAN-FD=%t, capability=%t)", wantFD, isFD, ok)
+			log.Printf("Auto driver: %s rejected: %v", candidate.Name, err)
+			errs = append(errs, fmt.Sprintf("%s: %v", strings.ToLower(candidate.Name), err))
+			continue
+		}
+		a.driver = dev
+		a.selectedName = candidate.Name
+		log.Printf("Auto driver selected: %s", candidate.Name)
+		return nil
 	}
 
 	return fmt.Errorf("no available CAN device (%s)", strings.Join(errs, "; "))
@@ -64,9 +114,13 @@ func (a *AutoDriver) Start() {
 }
 
 func (a *AutoDriver) Stop() {
-	if drv := a.getDriver(); drv != nil {
+	a.mu.Lock()
+	drv := a.driver
+	a.driver = nil
+	a.selectedName = ""
+	a.mu.Unlock()
+	if drv != nil {
 		drv.Stop()
-		return
 	}
 }
 
@@ -98,6 +152,21 @@ func (a *AutoDriver) IsFDMode() bool {
 		return provider.IsFDMode()
 	}
 	return a.canType == CANFD
+}
+
+func (a *AutoDriver) Config() Config {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	if provider, ok := a.driver.(ConfigProvider); ok {
+		return provider.Config()
+	}
+	return a.cfg
+}
+
+func (a *AutoDriver) SelectedName() string {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	return a.selectedName
 }
 
 func (a *AutoDriver) getDriver() CANDriver {

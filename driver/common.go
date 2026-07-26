@@ -3,6 +3,7 @@ package driver
 import (
 	"context"
 	"log"
+	"sync"
 )
 
 type DirectionType byte
@@ -92,6 +93,71 @@ type CANDriver interface {
 	Write(id int32, fd bool, data []byte) error
 	RxChan() <-chan UnifiedCANMessage
 	Context() context.Context
+}
+
+// ConfigProvider is implemented by hardware drivers that expose their
+// normalized runtime configuration.
+type ConfigProvider interface {
+	Config() Config
+}
+
+// driverLifecycle serializes initialization/cleanup and makes the read loop
+// start/stop sequence idempotent.
+type driverLifecycle struct {
+	opMu        sync.Mutex
+	mu          sync.Mutex
+	readWG      sync.WaitGroup
+	initialized bool
+	running     bool
+}
+
+func (l *driverLifecycle) isInitialized() bool {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	return l.initialized
+}
+
+func (l *driverLifecycle) markInitialized() {
+	l.mu.Lock()
+	l.initialized = true
+	l.mu.Unlock()
+}
+
+func (l *driverLifecycle) start(readLoop func()) bool {
+	l.mu.Lock()
+	if !l.initialized || l.running {
+		l.mu.Unlock()
+		return false
+	}
+	l.running = true
+	l.readWG.Add(1)
+	l.mu.Unlock()
+
+	go func() {
+		defer func() {
+			l.mu.Lock()
+			l.running = false
+			l.mu.Unlock()
+			l.readWG.Done()
+		}()
+		readLoop()
+	}()
+	return true
+}
+
+// cancelAndWait marks the instance stopped, calls cancel, and waits until the
+// hardware read loop is no longer executing vendor code.
+func (l *driverLifecycle) cancelAndWait(cancel context.CancelFunc) bool {
+	l.mu.Lock()
+	wasInitialized := l.initialized
+	l.initialized = false
+	l.mu.Unlock()
+
+	if cancel != nil {
+		cancel()
+	}
+	l.readWG.Wait()
+	return wasInitialized
 }
 
 // FDModeProvider is an optional capability implemented by drivers that can

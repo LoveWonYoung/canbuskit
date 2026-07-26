@@ -42,6 +42,7 @@ const (
 	vectorEventTagReceiveMsg   = 1
 	vectorEventTagTransmitMsg  = 10
 	vectorCanMsgFlagErrorFrame = 1
+	vectorCanMsgFlagRemote     = 0x10
 
 	vectorCanFdTagRxOK = 1024
 	vectorCanFdTagTxOK = 1028
@@ -141,11 +142,13 @@ type xlCanFdConf struct {
 }
 
 type Vector struct {
-	canType CanType
-	rxChan  chan UnifiedCANMessage
-	fanout  *rxFanout
-	ctx     context.Context
-	cancel  context.CancelFunc
+	canType   CanType
+	cfg       Config
+	rxChan    chan UnifiedCANMessage
+	fanout    *rxFanout
+	ctx       context.Context
+	cancel    context.CancelFunc
+	lifecycle driverLifecycle
 
 	dll *syscall.LazyDLL
 
@@ -176,72 +179,109 @@ type Vector struct {
 }
 
 func NewVector(canType CanType, deviceType int, canChannel int) *Vector {
+	return NewVectorWithConfig(DefaultConfig(canType, byte(canChannel)), deviceType)
+}
+
+func NewVectorWithConfig(cfg Config, deviceType int) *Vector {
 	ctx, cancel := context.WithCancel(context.Background())
 	return &Vector{
-		canType:    canType,
-		rxChan:     make(chan UnifiedCANMessage, RxChannelBufferSize),
+		canType:    cfg.Mode,
+		cfg:        cfg,
 		fanout:     nil,
 		ctx:        ctx,
 		cancel:     cancel,
 		portHandle: vectorInvalidPortHandle,
 		DeviceType: deviceType,
-		CANChannel: canChannel,
+		CANChannel: int(cfg.Channel),
 	}
 }
 
 func (v *Vector) Init() error {
-	v.ctx, v.cancel = context.WithCancel(context.Background())
-	v.rxChan = make(chan UnifiedCANMessage, RxChannelBufferSize)
-	v.fanout = newRxFanout(v.ctx, v.rxChan)
-	v.portHandle = vectorInvalidPortHandle
-
-	if err := v.loadDLL(); err != nil {
+	v.lifecycle.opMu.Lock()
+	defer v.lifecycle.opMu.Unlock()
+	if v.lifecycle.isInitialized() {
+		return nil
+	}
+	cfg, err := normalizeConfig(v.cfg)
+	if err != nil {
 		return err
 	}
+	v.cfg = cfg
+	v.canType = cfg.Mode
+	v.CANChannel = int(cfg.Channel)
+	v.ctx, v.cancel = context.WithCancel(context.Background())
+	v.rxChan = make(chan UnifiedCANMessage, cfg.RxBufferSize)
+	v.fanout = newRxFanout(v.ctx, v.rxChan)
+	v.portHandle = vectorInvalidPortHandle
+	cleanup := func(err error) error {
+		v.cancel()
+		v.fanout.Close()
+		if v.closePortProc != nil && v.portHandle != vectorInvalidPortHandle {
+			_, _, _ = v.closePortProc.Call(uintptr(v.portHandle))
+		}
+		if v.closeDriverProc != nil {
+			_, _, _ = v.closeDriverProc.Call()
+		}
+		close(v.rxChan)
+		v.fanout = nil
+		v.rxChan = nil
+		v.portHandle = vectorInvalidPortHandle
+		return err
+	}
+
+	if err := v.loadDLL(); err != nil {
+		return cleanup(err)
+	}
 	if err := v.callStatus(v.openDriverProc); err != nil {
-		return v.cleanup(fmt.Errorf("xlOpenDriver failed: %w", err))
+		return cleanup(fmt.Errorf("xlOpenDriver failed: %w", err))
 	}
 
 	if err := v.selectChannel(); err != nil {
-		return v.cleanup(err)
+		return cleanup(err)
 	}
 
 	if err := v.openPort(); err != nil {
-		return v.cleanup(err)
+		return cleanup(err)
 	}
 
 	if err := v.configureChannel(); err != nil {
-		return v.cleanup(err)
+		return cleanup(err)
 	}
 
+	v.lifecycle.markInitialized()
 	log.Println("Vector driver initialized successfully.")
 	return nil
 }
 
 func (v *Vector) Start() {
-	if v.portHandle == vectorInvalidPortHandle {
+	v.lifecycle.opMu.Lock()
+	defer v.lifecycle.opMu.Unlock()
+	if !v.lifecycle.isInitialized() || v.portHandle == vectorInvalidPortHandle {
 		log.Println("Vector not initialized, cannot start")
 		return
 	}
-	go v.readLoop()
+	if v.lifecycle.start(v.readLoop) {
+		log.Println("Vector driver started")
+	}
 }
 
 func (v *Vector) Stop() {
-	if v.cancel != nil {
-		v.cancel()
-	}
+	v.lifecycle.opMu.Lock()
+	defer v.lifecycle.opMu.Unlock()
+	wasInitialized := v.lifecycle.cancelAndWait(v.cancel)
 
 	if v.fanout != nil {
 		v.fanout.Close()
+		v.fanout = nil
 	}
 
-	if v.deactivateChannelProc != nil && v.portHandle != vectorInvalidPortHandle {
+	if wasInitialized && v.deactivateChannelProc != nil && v.portHandle != vectorInvalidPortHandle {
 		_, _, _ = v.deactivateChannelProc.Call(uintptr(v.portHandle), uintptr(v.channelMask))
 	}
-	if v.closePortProc != nil && v.portHandle != vectorInvalidPortHandle {
+	if wasInitialized && v.closePortProc != nil && v.portHandle != vectorInvalidPortHandle {
 		_, _, _ = v.closePortProc.Call(uintptr(v.portHandle))
 	}
-	if v.closeDriverProc != nil {
+	if wasInitialized && v.closeDriverProc != nil {
 		_, _, _ = v.closeDriverProc.Call()
 	}
 
@@ -253,14 +293,13 @@ func (v *Vector) Stop() {
 }
 
 func (v *Vector) Write(id int32, fd bool, data []byte) error {
-	if len(data) == 0 {
-		return errors.New("data length is 0")
+	v.lifecycle.opMu.Lock()
+	defer v.lifecycle.opMu.Unlock()
+	if !v.lifecycle.isInitialized() {
+		return errors.New("Vector driver is not initialized")
 	}
-	if !fd && len(data) > 8 {
-		return fmt.Errorf("data length %d exceeds CAN maximum of 8", len(data))
-	}
-	if fd && len(data) > 64 {
-		return fmt.Errorf("data length %d exceeds CAN-FD maximum of 64", len(data))
+	if err := validateWrite(v.cfg, id, fd, data); err != nil {
+		return err
 	}
 
 	if fd {
@@ -288,6 +327,9 @@ func (v *Vector) Write(id int32, fd bool, data []byte) error {
 		if int32(status) != vectorStatusSuccess {
 			return fmt.Errorf("xlCanTransmitEx failed: %s", v.errorString(int16(status)))
 		}
+		if msgSent != 1 {
+			return fmt.Errorf("xlCanTransmitEx sent %d of 1 messages", msgSent)
+		}
 		logCANMessage("TX", uint32(id), txEvent.TagData.CanMsg.DLC, txEvent.TagData.CanMsg.Data[:dlcToLen(txEvent.TagData.CanMsg.DLC)], CANFD)
 		return nil
 	}
@@ -313,6 +355,9 @@ func (v *Vector) Write(id int32, fd bool, data []byte) error {
 		)
 		if int32(status) != vectorStatusSuccess {
 			return fmt.Errorf("xlCanTransmitEx failed: %s", v.errorString(int16(status)))
+		}
+		if msgSent != 1 {
+			return fmt.Errorf("xlCanTransmitEx sent %d of 1 messages", msgSent)
 		}
 		logCANMessage("TX", uint32(id), txEvent.TagData.CanMsg.DLC, txEvent.TagData.CanMsg.Data[:len(data)], CAN)
 		return nil
@@ -342,13 +387,25 @@ func (v *Vector) Write(id int32, fd bool, data []byte) error {
 }
 
 func (v *Vector) RxChan() <-chan UnifiedCANMessage {
+	v.lifecycle.opMu.Lock()
+	defer v.lifecycle.opMu.Unlock()
 	if v.fanout == nil {
 		return nil
 	}
-	return v.fanout.Subscribe(RxChannelBufferSize)
+	return v.fanout.Subscribe(v.cfg.RxBufferSize)
 }
 
-func (v *Vector) Context() context.Context { return v.ctx }
+func (v *Vector) Context() context.Context {
+	v.lifecycle.opMu.Lock()
+	defer v.lifecycle.opMu.Unlock()
+	return v.ctx
+}
+
+func (v *Vector) Config() Config {
+	v.lifecycle.opMu.Lock()
+	defer v.lifecycle.opMu.Unlock()
+	return v.cfg
+}
 
 func (v *Vector) loadDLL() error {
 	if v.dll != nil {
@@ -474,8 +531,8 @@ func (v *Vector) configureChannel() error {
 
 	if v.canType == CANFD {
 		var conf xlCanFdConf
-		conf.ArbitrationBitRate = vectorDefaultBitrate
-		conf.DataBitRate = vectorDefaultDataBitrate
+		conf.ArbitrationBitRate = v.cfg.NominalBitrate
+		conf.DataBitRate = v.cfg.DataBitrate
 		conf.SjwAbr = vectorDefaultCanFdSJW
 		conf.Tseg1Abr = vectorDefaultCanFdTseg1
 		conf.Tseg2Abr = vectorDefaultCanFdTseg2
@@ -487,7 +544,7 @@ func (v *Vector) configureChannel() error {
 			return fmt.Errorf("xlCanFdSetConfiguration failed: %w", err)
 		}
 	} else {
-		if err := v.callStatus(v.canSetChannelBitrateProc, uintptr(v.portHandle), uintptr(channelMask), uintptr(vectorDefaultBitrate)); err != nil {
+		if err := v.callStatus(v.canSetChannelBitrateProc, uintptr(v.portHandle), uintptr(channelMask), uintptr(v.cfg.NominalBitrate)); err != nil {
 			return fmt.Errorf("xlCanSetChannelBitrate failed: %w", err)
 		}
 	}
@@ -508,7 +565,7 @@ func (v *Vector) configureChannel() error {
 }
 
 func (v *Vector) readLoop() {
-	ticker := time.NewTicker(PollingInterval)
+	ticker := time.NewTicker(v.cfg.PollingInterval)
 	defer ticker.Stop()
 
 	for {
@@ -555,11 +612,20 @@ func (v *Vector) readOneCanFD() bool {
 		return true
 	}
 	msg := event.TagData.CanRxOkMsg
+	if msg.CanID&0x80000000 != 0 || msg.CanID&0x1FFFFFFF > 0x7FF {
+		return true
+	}
 	dlc := msg.DLC
 	payloadLen := dlcToLen(dlc)
 
 	var unified UnifiedCANMessage
 	unified.Direction = RX
+	if event.Tag == vectorCanFdTagTxOK {
+		unified.Direction = TX
+		if !v.cfg.IncludeTxEcho {
+			return true
+		}
+	}
 	unified.ID = msg.CanID & 0x1FFFFFFF
 	unified.DLC = dlc
 	unified.IsFD = msg.MsgFlags&vectorCanFdRxFlagEDL != 0
@@ -600,11 +666,18 @@ func (v *Vector) readOneCAN() bool {
 	if event.Tag != vectorEventTagReceiveMsg {
 		return true
 	}
-	if event.TagData.Msg.Flags&vectorCanMsgFlagErrorFrame != 0 {
+	if event.TagData.Msg.Flags&(vectorCanMsgFlagErrorFrame|vectorCanMsgFlagRemote) != 0 {
+		return true
+	}
+	if event.TagData.Msg.ID&0x80000000 != 0 || event.TagData.Msg.ID&0x1FFFFFFF > 0x7FF {
 		return true
 	}
 
 	dlc := byte(event.TagData.Msg.DLC)
+	if dlc > 8 {
+		log.Printf("Vector returned invalid classic CAN DLC %d", dlc)
+		return true
+	}
 	payloadLen := dlcToLen(dlc)
 
 	var unified UnifiedCANMessage
@@ -659,11 +732,8 @@ func bytePtrToString(p *byte) string {
 	return string(buf)
 }
 
-func (v *Vector) cleanup(err error) error {
-	v.Stop()
-	return err
-}
-
 func (v *Vector) IsFDMode() bool {
+	v.lifecycle.opMu.Lock()
+	defer v.lifecycle.opMu.Unlock()
 	return v.canType == CANFD
 }

@@ -300,7 +300,7 @@ func (t *TSMasterLoader) Close() error {
 
 type TLIBCAN struct {
 	FIdxChn     uint8    // 通道
-	FProperties uint8    // 属性定义：[7] 0-normal frame, 1-error frame
+	FProperties uint8    // bit0 TX, bit1 remote, bit2 extended
 	FDLC        uint8    // dlc from 0 to 8
 	FReserved   uint8    // 保留字段
 	FIdentifier int32    // ID
@@ -309,13 +309,19 @@ type TLIBCAN struct {
 }
 type TLIBCANFD struct {
 	FIdxChn       uint8 // 通道
-	FProperties   uint8 // 属性定义：[7] 0-normal frame, 1-error frame
+	FProperties   uint8 // bit0 TX, bit1 remote, bit2 extended
 	FDLC          uint8 //dlc from 0 to 15
 	FFDProperties uint8
 	FIdentifier   int32     // ID
 	FTimeUs       int64     // 时间戳
 	FData         [64]uint8 // 报文数据
 }
+
+const (
+	tsCANPropertyTX       = 1 << 0
+	tsCANPropertyRemote   = 1 << 1
+	tsCANPropertyExtended = 1 << 2
+)
 
 type TSMaster struct {
 	loader      *TSMasterLoader
@@ -324,40 +330,69 @@ type TSMaster struct {
 	fanout      *rxFanout
 	ctx         context.Context
 	cancel      context.CancelFunc
+	cfg         Config
+	lifecycle   driverLifecycle
 	canType     CanType
 	CANChannel  byte
 	deviceType  int
 }
 
 func NewTSMaster(cantype CanType, canChannel byte, deviceType int) *TSMaster {
+	return NewTSMasterWithConfig(DefaultConfig(cantype, canChannel), deviceType)
+}
+
+func NewTSMasterWithConfig(cfg Config, deviceType int) *TSMaster {
 	ctx, cancel := context.WithCancel(context.Background())
 	return &TSMaster{
-		rxChan:     make(chan UnifiedCANMessage, RxChannelBufferSize),
 		ctx:        ctx,
 		cancel:     cancel,
-		canType:    cantype,
-		CANChannel: canChannel,
+		cfg:        cfg,
+		canType:    cfg.Mode,
+		CANChannel: cfg.Channel,
 		deviceType: deviceType,
 	}
 }
 
 func (t *TSMaster) Init() error {
+	t.lifecycle.opMu.Lock()
+	defer t.lifecycle.opMu.Unlock()
+	if t.lifecycle.isInitialized() {
+		return nil
+	}
 	fmt.Println("=== TSMaster Initializing ===")
+
+	cfg, err := normalizeConfig(t.cfg)
+	if err != nil {
+		return err
+	}
+	t.cfg = cfg
+	t.canType = cfg.Mode
+	t.CANChannel = cfg.Channel
+	if t.CANChannel >= 4 {
+		return fmt.Errorf("TSMaster channel %d out of range (0-3)", t.CANChannel)
+	}
 
 	// 创建context和cancel函数
 	t.ctx, t.cancel = context.WithCancel(context.Background())
 
 	// 初始化接收通道
-	t.rxChan = make(chan UnifiedCANMessage, RxChannelBufferSize)
+	t.rxChan = make(chan UnifiedCANMessage, cfg.RxBufferSize)
 	t.fanout = newRxFanout(t.ctx, t.rxChan)
 
 	cleanup := func(err error) error {
 		if t.cancel != nil {
 			t.cancel()
 		}
+		if t.loader != nil && t.isConnected {
+			_, _, _ = t.loader.GetProcAddress("tsapp_disconnect").Call()
+		}
 		if t.loader != nil {
 			t.loader.Close()
 			t.loader = nil
+		}
+		if t.fanout != nil {
+			t.fanout.Close()
+			t.fanout = nil
 		}
 		if t.rxChan != nil {
 			close(t.rxChan)
@@ -368,7 +403,6 @@ func (t *TSMaster) Init() error {
 	}
 
 	// 创建TSMaster加载器
-	var err error
 	t.loader, err = NewTSMasterLoader()
 	if err != nil {
 		return cleanup(fmt.Errorf("failed to load TSMaster DLL: %w", err))
@@ -420,31 +454,43 @@ func (t *TSMaster) Init() error {
 	// 设置映射: APP_CAN -> TS_USB_DEVICE(3) / deviceSubType / CANChannel
 	r, _, _ = t.loader.GetProcAddress("tsapp_set_mapping_verbose").Call(
 		uintptr(unsafe.Pointer(appName)),
-		uintptr(0), // APP_CAN
-		uintptr(0), // 软件通道
+		uintptr(0),            // APP_CAN
+		uintptr(t.CANChannel), // 软件通道
 		uintptr(unsafe.Pointer(deviceName)),
 		uintptr(TS_USB_DEVICE), // TS_USB_DEVICE
 		uintptr(t.deviceType),  // 设备子类型
 		uintptr(0),             // 硬件索引
-		uintptr(0),             // 硬件通道
+		uintptr(t.CANChannel),  // 硬件通道
 		uintptr(1),             // 启用映射
 	)
 	fmt.Printf("Set mapping verbose (%s/%d) result: %d\n", devName, t.deviceType, r)
 	if r != 0 {
 		return cleanup(fmt.Errorf("tsapp_set_mapping_verbose failed: %d", r))
 	}
-	//tsapp_configure_baudrate_canfd(0, 500.0, 2000.0, 1, 0, True):
-	br := float32(500.0)
-	bd := float32(2000.0)
-	r, _, _ = t.loader.GetProcAddress("tsapp_configure_baudrate_canfd").Call(
-		uintptr(t.CANChannel),
-		uintptr(math.Float32bits(br)),
-		uintptr(math.Float32bits(bd)),
-		uintptr(1),
-		uintptr(0),
-		uintptr(1),
-	)
-	fmt.Printf("canfd init: %d\n", r)
+	br := float32(t.cfg.NominalBitrate) / 1000
+	if t.canType == CANFD {
+		bd := float32(t.cfg.DataBitrate) / 1000
+		r, _, _ = t.loader.GetProcAddress("tsapp_configure_baudrate_canfd").Call(
+			uintptr(t.CANChannel),
+			uintptr(math.Float32bits(br)),
+			uintptr(math.Float32bits(bd)),
+			uintptr(1),
+			uintptr(0),
+			uintptr(1),
+		)
+		fmt.Printf("CAN-FD bitrate configuration result: %d\n", r)
+	} else {
+		r, _, _ = t.loader.GetProcAddress("tsapp_configure_baudrate_can").Call(
+			uintptr(t.CANChannel),
+			uintptr(math.Float32bits(br)),
+			uintptr(0),
+			uintptr(1),
+		)
+		fmt.Printf("CAN bitrate configuration result: %d\n", r)
+	}
+	if r != 0 {
+		return cleanup(fmt.Errorf("configure bitrate failed: %d", r))
+	}
 	// 连接设备
 	r, _, _ = t.loader.GetProcAddress("tsapp_connect").Call()
 	fmt.Printf("Connect result: %d\n", r)
@@ -456,20 +502,26 @@ func (t *TSMaster) Init() error {
 	// 启用接收FIFO
 	r, _, _ = t.loader.GetProcAddress("tsfifo_enable_receive_fifo").Call()
 	fmt.Printf("Enable receive FIFO result: %d\n", r)
+	if r != 0 {
+		return cleanup(fmt.Errorf("enable receive FIFO failed: %d", r))
+	}
 
+	t.lifecycle.markInitialized()
 	return nil
 }
 func (t *TSMaster) Start() {
-	if !t.isConnected {
+	t.lifecycle.opMu.Lock()
+	defer t.lifecycle.opMu.Unlock()
+	if !t.lifecycle.isInitialized() || !t.isConnected {
 		fmt.Println("TSMaster not connected, cannot start")
 		return
 	}
-	fmt.Println("TSMaster started")
-	// 这里可以启动接收线程等
-	go t.readLoop()
+	if t.lifecycle.start(t.readLoop) {
+		fmt.Println("TSMaster started")
+	}
 }
 func (t *TSMaster) readLoop() {
-	ticker := time.NewTicker(PollingInterval)
+	ticker := time.NewTicker(t.cfg.PollingInterval)
 	defer ticker.Stop()
 	var canfdMsg [MsgBufferSize]TLIBCANFD
 	for {
@@ -478,18 +530,33 @@ func (t *TSMaster) readLoop() {
 			return
 		case <-ticker.C:
 			var size = int32(MsgBufferSize)
+			rxTxMode := uintptr(0)
+			if t.cfg.IncludeTxEcho {
+				rxTxMode = 1
+			}
 			if r, _, _ := t.loader.GetProcAddress("tsfifo_receive_canfd_msgs").Call(
 				uintptr(unsafe.Pointer(&canfdMsg[0])),
 				uintptr(unsafe.Pointer(&size)),
 				uintptr(t.CANChannel),
-				uintptr(1),
+				rxTxMode,
 			); r != 0 {
+				continue
+			}
+			if size < 0 || size > MsgBufferSize {
+				log.Printf("TSMaster returned invalid receive count %d", size)
 				continue
 			}
 			for i := 0; i < int(size); i++ {
 				msg := canfdMsg[i]
+				if msg.FIdentifier < 0 || msg.FIdentifier > 0x7FF {
+					continue
+				}
+				if msg.FProperties&(tsCANPropertyRemote|tsCANPropertyExtended) != 0 {
+					continue
+				}
 				actualLen := msg.FDLC
-				if actualLen == 0 {
+				if actualLen > 15 {
+					log.Printf("TSMaster returned invalid DLC %d", actualLen)
 					continue
 				}
 
@@ -501,7 +568,7 @@ func (t *TSMaster) readLoop() {
 				} else {
 					msgType = CANFD
 				}
-				switch canfdMsg[i].FProperties & 1 {
+				switch canfdMsg[i].FProperties & tsCANPropertyTX {
 				case 0:
 					unifiedMsg = UnifiedCANMessage{
 						Direction: RX, ID: uint32(msg.FIdentifier), DLC: msg.FDLC, Data: msg.FData, IsFD: msg.FFDProperties&1 == 1,
@@ -509,6 +576,9 @@ func (t *TSMaster) readLoop() {
 
 					logCANMessage("RX", unifiedMsg.ID, unifiedMsg.DLC, unifiedMsg.Data[:dlcToLen(unifiedMsg.DLC)], msgType)
 				case 1:
+					if !t.cfg.IncludeTxEcho {
+						continue
+					}
 					unifiedMsg = UnifiedCANMessage{
 						Direction: TX, ID: uint32(msg.FIdentifier), DLC: msg.FDLC, Data: msg.FData, IsFD: msg.FFDProperties&1 == 1,
 					}
@@ -525,15 +595,16 @@ func (t *TSMaster) readLoop() {
 	}
 }
 func (t *TSMaster) Stop() {
-	if t.cancel != nil {
-		t.cancel()
-	}
+	t.lifecycle.opMu.Lock()
+	defer t.lifecycle.opMu.Unlock()
+	wasInitialized := t.lifecycle.cancelAndWait(t.cancel)
 
 	if t.fanout != nil {
 		t.fanout.Close()
+		t.fanout = nil
 	}
 
-	if t.loader != nil && t.isConnected {
+	if wasInitialized && t.loader != nil && t.isConnected {
 		r, _, _ := t.loader.GetProcAddress("tsapp_disconnect").Call()
 		fmt.Printf("Disconnect result: %d\n", r)
 		t.isConnected = false
@@ -552,14 +623,13 @@ func (t *TSMaster) Stop() {
 	fmt.Println("TSMaster stopped")
 }
 func (t *TSMaster) Write(id int32, fd bool, data []byte) error {
-	if len(data) == 0 {
-		return errors.New("data length is 0")
+	t.lifecycle.opMu.Lock()
+	defer t.lifecycle.opMu.Unlock()
+	if !t.lifecycle.isInitialized() {
+		return errors.New("TSMaster driver is not initialized")
 	}
-	if !fd && len(data) > 8 {
-		return fmt.Errorf("data length %d exceeds CAN maximum of 8", len(data))
-	}
-	if fd && len(data) > 64 {
-		return fmt.Errorf("data length %d exceeds CAN-FD maximum of 64", len(data))
+	if err := validateWrite(t.cfg, id, fd, data); err != nil {
+		return err
 	}
 
 	var canfdMsg TLIBCANFD
@@ -583,12 +653,16 @@ func (t *TSMaster) Write(id int32, fd bool, data []byte) error {
 	return nil
 }
 func (t *TSMaster) RxChan() <-chan UnifiedCANMessage {
+	t.lifecycle.opMu.Lock()
+	defer t.lifecycle.opMu.Unlock()
 	if t.fanout == nil {
 		return nil
 	}
-	return t.fanout.Subscribe(RxChannelBufferSize)
+	return t.fanout.Subscribe(t.cfg.RxBufferSize)
 }
 func (t *TSMaster) Context() context.Context {
+	t.lifecycle.opMu.Lock()
+	defer t.lifecycle.opMu.Unlock()
 	if t.ctx != nil {
 		return t.ctx
 	}
@@ -596,5 +670,13 @@ func (t *TSMaster) Context() context.Context {
 }
 
 func (t *TSMaster) IsFDMode() bool {
+	t.lifecycle.opMu.Lock()
+	defer t.lifecycle.opMu.Unlock()
 	return t.canType == CANFD
+}
+
+func (t *TSMaster) Config() Config {
+	t.lifecycle.opMu.Lock()
+	defer t.lifecycle.opMu.Unlock()
+	return t.cfg
 }

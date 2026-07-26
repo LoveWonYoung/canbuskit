@@ -41,6 +41,7 @@ const (
 
 const (
 	pcanMessageStandard = 0x00
+	pcanMessageRTR      = 0x01
 	pcanMessageExtended = 0x02
 	pcanMessageFD       = 0x04
 	pcanMessageBRS      = 0x08
@@ -74,6 +75,8 @@ type PCAN struct {
 	fanout     *rxFanout
 	ctx        context.Context
 	cancel     context.CancelFunc
+	cfg        Config
+	lifecycle  driverLifecycle
 	canType    CanType
 	handle     uint16
 	CANChannel byte
@@ -90,72 +93,114 @@ type PCAN struct {
 }
 
 func NewPCAN(canType CanType, canChannel byte) *PCAN {
+	return NewPCANWithConfig(DefaultConfig(canType, canChannel))
+}
+
+func NewPCANWithConfig(cfg Config) *PCAN {
 	ctx, cancel := context.WithCancel(context.Background())
-	handle, _ := pcanUSBHandle(int(canChannel))
+	handle, _ := pcanUSBHandle(int(cfg.Channel))
 	return &PCAN{
-		rxChan:     make(chan UnifiedCANMessage, RxChannelBufferSize),
 		fanout:     nil,
 		ctx:        ctx,
 		cancel:     cancel,
-		canType:    canType,
+		cfg:        cfg,
+		canType:    cfg.Mode,
 		handle:     handle,
-		CANChannel: canChannel,
+		CANChannel: cfg.Channel,
 	}
 }
 
 func (p *PCAN) Init() error {
+	p.lifecycle.opMu.Lock()
+	defer p.lifecycle.opMu.Unlock()
+	if p.lifecycle.isInitialized() {
+		return nil
+	}
+
+	cfg, err := normalizeConfig(p.cfg)
+	if err != nil {
+		return err
+	}
+	p.cfg = cfg
+	p.canType = cfg.Mode
+	p.CANChannel = cfg.Channel
 	p.ctx, p.cancel = context.WithCancel(context.Background())
-	p.rxChan = make(chan UnifiedCANMessage, RxChannelBufferSize)
+	p.rxChan = make(chan UnifiedCANMessage, cfg.RxBufferSize)
 	p.fanout = newRxFanout(p.ctx, p.rxChan)
+	cleanup := func(err error) error {
+		p.cancel()
+		p.fanout.Close()
+		close(p.rxChan)
+		p.fanout = nil
+		p.rxChan = nil
+		return err
+	}
 
 	handle, err := pcanUSBHandle(int(p.CANChannel))
 	if err != nil {
-		return err
+		return cleanup(err)
 	}
 	p.handle = handle
 
 	if err := p.loadDLL(); err != nil {
-		return err
+		return cleanup(err)
 	}
 
+	var initErr error
 	switch p.canType {
 	case CANFD:
-		return p.initFD()
+		initErr = p.initFD()
 	case CAN:
-		return p.initCAN()
+		initErr = p.initCAN()
 	default:
-		return p.initFD()
+		initErr = fmt.Errorf("unknown CAN type: %d", p.canType)
 	}
+	if initErr != nil {
+		return cleanup(initErr)
+	}
+	p.lifecycle.markInitialized()
+	return nil
 }
 
 func (p *PCAN) Start() {
-	log.Println("PCAN driver started...")
+	p.lifecycle.opMu.Lock()
+	defer p.lifecycle.opMu.Unlock()
+	if !p.lifecycle.isInitialized() {
+		log.Println("PCAN start called before successful initialization")
+		return
+	}
 	p.drainInitialBuffer()
-	go p.readLoop()
+	if p.lifecycle.start(p.readLoop) {
+		log.Println("PCAN driver started...")
+	}
 }
 
 func (p *PCAN) Stop() {
+	p.lifecycle.opMu.Lock()
+	defer p.lifecycle.opMu.Unlock()
 	log.Println("Stopping PCAN driver...")
-	if p.cancel != nil {
-		p.cancel()
-	}
+	wasInitialized := p.lifecycle.cancelAndWait(p.cancel)
 	if p.fanout != nil {
 		p.fanout.Close()
+		p.fanout = nil
 	}
-	if p.uninitProc != nil {
+	if wasInitialized && p.uninitProc != nil {
 		_, _, _ = p.uninitProc.Call(uintptr(p.handle))
+	}
+	if p.rxChan != nil {
+		close(p.rxChan)
+		p.rxChan = nil
 	}
 }
 
 func (p *PCAN) Write(id int32, fd bool, data []byte) error {
-	if len(data) == 0 {
-		return errors.New("data length is 0")
+	p.lifecycle.opMu.Lock()
+	defer p.lifecycle.opMu.Unlock()
+	if !p.lifecycle.isInitialized() {
+		return errors.New("PCAN driver is not initialized")
 	}
-	if !fd && len(data) > 8 {
-		return fmt.Errorf("data length %d exceeds CAN maximum of 8", len(data))
-	}
-	if fd && len(data) > 64 {
-		return fmt.Errorf("data length %d exceeds CAN-FD maximum of 64", len(data))
+	if err := validateWrite(p.cfg, id, fd, data); err != nil {
+		return err
 	}
 
 	if fd {
@@ -164,7 +209,7 @@ func (p *PCAN) Write(id int32, fd bool, data []byte) error {
 		}
 		var msg pcanMsgFD
 		msg.ID = uint32(id)
-		msg.MsgType = pcanMessageFD | pcanMessageBRS
+		msg.MsgType = pcanMessageFD
 		msg.DLC = dataLenToDlc(len(data))
 		copy(msg.Data[:], data)
 		status := p.callWriteFD(&msg)
@@ -206,21 +251,37 @@ func (p *PCAN) Write(id int32, fd bool, data []byte) error {
 }
 
 func (p *PCAN) RxChan() <-chan UnifiedCANMessage {
+	p.lifecycle.opMu.Lock()
+	defer p.lifecycle.opMu.Unlock()
 	if p.fanout == nil {
 		return nil
 	}
-	return p.fanout.Subscribe(RxChannelBufferSize)
+	return p.fanout.Subscribe(p.cfg.RxBufferSize)
 }
 
-func (p *PCAN) Context() context.Context { return p.ctx }
+func (p *PCAN) Context() context.Context {
+	p.lifecycle.opMu.Lock()
+	defer p.lifecycle.opMu.Unlock()
+	return p.ctx
+}
+
+func (p *PCAN) Config() Config {
+	p.lifecycle.opMu.Lock()
+	defer p.lifecycle.opMu.Unlock()
+	return p.cfg
+}
 
 func (p *PCAN) initCAN() error {
 	if p.initProc == nil {
 		return errors.New("pcan init procedure not loaded")
 	}
+	baud := pcanClassicBaud(p.cfg.NominalBitrate)
+	if baud == 0 {
+		return fmt.Errorf("unsupported PCAN classic CAN bitrate: %d", p.cfg.NominalBitrate)
+	}
 	status, _, _ := p.initProc.Call(
 		uintptr(p.handle),
-		uintptr(pcanBaud500K),
+		uintptr(baud),
 		uintptr(pcanTypeISA),
 		uintptr(pcanIOPort),
 		uintptr(pcanInterrupt),
@@ -235,7 +296,11 @@ func (p *PCAN) initFD() error {
 	if p.initFDProc == nil {
 		return errors.New("pcan init fd procedure not loaded")
 	}
-	bitrate, err := syscall.BytePtrFromString(pcanFDDefaultBitrate)
+	bitrateConfig, err := pcanFDBitrate(p.cfg.NominalBitrate, p.cfg.DataBitrate)
+	if err != nil {
+		return err
+	}
+	bitrate, err := syscall.BytePtrFromString(bitrateConfig)
 	if err != nil {
 		return fmt.Errorf("pcan fd bitrate string invalid: %w", err)
 	}
@@ -332,7 +397,7 @@ func (p *PCAN) loadDLL() error {
 }
 
 func (p *PCAN) drainInitialBuffer() {
-	for {
+	for i := 0; i < MsgBufferSize; i++ {
 		if p.canType == CANFD {
 			var msg pcanMsgFD
 			var ts uint64
@@ -349,10 +414,11 @@ func (p *PCAN) drainInitialBuffer() {
 			}
 		}
 	}
+	log.Printf("PCAN initial receive queue still contains frames after draining %d entries", MsgBufferSize)
 }
 
 func (p *PCAN) readLoop() {
-	ticker := time.NewTicker(PollingInterval)
+	ticker := time.NewTicker(p.cfg.PollingInterval)
 	defer ticker.Stop()
 
 	for {
@@ -411,7 +477,7 @@ func (p *PCAN) handleReadStatus(status uint32) bool {
 }
 
 func (p *PCAN) enqueueMessage(id uint32, dlc byte, data []byte, msgType uint8) {
-	if msgType&pcanMessageErrFrame != 0 {
+	if msgType&(pcanMessageRTR|pcanMessageErrFrame|pcanMessageExtended) != 0 || id > 0x7FF {
 		return
 	}
 	isFD := msgType&pcanMessageFD != 0
@@ -422,6 +488,12 @@ func (p *PCAN) enqueueMessage(id uint32, dlc byte, data []byte, msgType uint8) {
 
 	var unified UnifiedCANMessage
 	unified.Direction = RX
+	if msgType&pcanMessageEcho != 0 {
+		unified.Direction = TX
+		if !p.cfg.IncludeTxEcho {
+			return
+		}
+	}
 	unified.ID = id
 	unified.DLC = dlc
 	unified.IsFD = isFD
@@ -513,5 +585,86 @@ func pcanUSBHandle(channel int) (uint16, error) {
 }
 
 func (p *PCAN) IsFDMode() bool {
+	p.lifecycle.opMu.Lock()
+	defer p.lifecycle.opMu.Unlock()
 	return p.canType == CANFD
+}
+
+func pcanClassicBaud(bitrate uint32) uint16 {
+	switch bitrate {
+	case 1_000_000:
+		return 0x0014
+	case 800_000:
+		return 0x0016
+	case 500_000:
+		return pcanBaud500K
+	case 250_000:
+		return 0x011C
+	case 125_000:
+		return 0x031C
+	case 100_000:
+		return 0x432F
+	case 50_000:
+		return 0x472F
+	case 20_000:
+		return 0x532F
+	case 10_000:
+		return 0x672F
+	case 5_000:
+		return 0x7F7F
+	default:
+		return 0
+	}
+}
+
+func pcanFDBitrate(nominal, data uint32) (string, error) {
+	if nominal == 500_000 && data == 2_000_000 {
+		return pcanFDDefaultBitrate, nil
+	}
+	nomBRP, nomTseg1, nomTseg2, err := findPCANBitTiming(nominal, 256, 128)
+	if err != nil {
+		return "", fmt.Errorf("unsupported PCAN nominal bitrate %d: %w", nominal, err)
+	}
+	dataBRP, dataTseg1, dataTseg2, err := findPCANBitTiming(data, 32, 16)
+	if err != nil {
+		return "", fmt.Errorf("unsupported PCAN data bitrate %d: %w", data, err)
+	}
+	return fmt.Sprintf(
+		"f_clock_mhz=80,nom_brp=%d,nom_tseg1=%d,nom_tseg2=%d,nom_sjw=%d,data_brp=%d,data_tseg1=%d,data_tseg2=%d,data_sjw=%d",
+		nomBRP, nomTseg1, nomTseg2, min(nomTseg2, 4),
+		dataBRP, dataTseg1, dataTseg2, min(dataTseg2, 4),
+	), nil
+}
+
+func findPCANBitTiming(bitrate uint32, maxTseg1, maxTseg2 int) (brp, tseg1, tseg2 int, err error) {
+	if bitrate == 0 || 80_000_000%bitrate != 0 {
+		return 0, 0, 0, errors.New("bitrate cannot be represented with an 80 MHz clock")
+	}
+	targetTQ := int(80_000_000 / bitrate)
+	bestError := 101
+	for candidateBRP := 1; candidateBRP <= 1024; candidateBRP++ {
+		if targetTQ%candidateBRP != 0 {
+			continue
+		}
+		totalTQ := targetTQ / candidateBRP
+		for candidateTseg2 := 1; candidateTseg2 <= maxTseg2; candidateTseg2++ {
+			candidateTseg1 := totalTQ - 1 - candidateTseg2
+			if candidateTseg1 < 1 || candidateTseg1 > maxTseg1 {
+				continue
+			}
+			samplePoint := (1 + candidateTseg1) * 100 / totalTQ
+			sampleError := samplePoint - 80
+			if sampleError < 0 {
+				sampleError = -sampleError
+			}
+			if sampleError < bestError {
+				brp, tseg1, tseg2 = candidateBRP, candidateTseg1, candidateTseg2
+				bestError = sampleError
+			}
+		}
+	}
+	if brp == 0 {
+		return 0, 0, 0, errors.New("no valid bit timing found")
+	}
+	return brp, tseg1, tseg2, nil
 }
