@@ -33,12 +33,12 @@ func decodeSTmin(stMinByte byte) time.Duration {
 	return 127 * time.Millisecond
 }
 
-func ParseFrame(msg *CanMessage, rxPrefixSize int) (ISOTPFrame, error) {
-	if len(msg.Data) <= rxPrefixSize {
-		return nil, fmt.Errorf("CAN数据长度 (%d) 小于等于前缀长度 (%d)", len(msg.Data), rxPrefixSize)
+func ParseFrame(msg *CanMessage) (ISOTPFrame, error) {
+	if msg == nil || len(msg.Data) == 0 {
+		return nil, fmt.Errorf("CAN数据为空")
 	}
 
-	payload := msg.Data[rxPrefixSize:]
+	payload := msg.Data
 	pciType := payload[0] & 0xF0
 
 	switch pciType {

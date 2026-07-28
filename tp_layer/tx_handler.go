@@ -6,8 +6,6 @@ import (
 	"time"
 )
 
-// ProcessTx is removed in favor of event-driven handlers called from Run()
-
 // initiateTx starts the transmission of a new message.
 // It is called when data arrives on txDataChan and state is Idle.
 func (t *Transport) initiateTx(payload []byte, txChan chan<- CanMessage) {
@@ -30,7 +28,7 @@ func (t *Transport) initiateTx(payload []byte, txChan chan<- CanMessage) {
 			return
 		}
 
-		msg := t.makeTxMsg(data, Physical)
+		msg := t.makeTxMsg(data)
 		// 阻塞发送：对端 STmin=0 时会高速产生 CF，非阻塞入队在 TX 消费略慢时会丢帧并破坏多帧语义。
 		txChan <- msg
 		// Done
@@ -58,7 +56,7 @@ func (t *Transport) initiateTx(payload []byte, txChan chan<- CanMessage) {
 		t.txSeqNum = 1
 		t.txState = StateWaitFC
 
-		msg := t.makeTxMsg(data, Physical)
+		msg := t.makeTxMsg(data)
 		txChan <- msg
 
 		// Start FC timeout timer
@@ -78,30 +76,14 @@ func (t *Transport) handleTxFlowControl(fc *FlowControlFrame) {
 
 	switch fc.FlowStatus {
 	case FlowStatusContinueToSend:
-		t.wftCounter = 0
-		t.remoteBlocksize = fc.BlockSize
-
-		// Set STmin
-		t.remoteStmin = fc.STmin
-
+		t.remoteBlockSize = fc.BlockSize
+		t.remoteSTmin = fc.STmin
 		t.txState = StateTransmit
 		t.txBlockCounter = 0
-
-		// Start STmin timer to trigger first CF send.
-		// If STmin is 0, we could send immediately, but using the timer loop is cleaner
-		// and prevents blocking the RX loop for too long.
 		t.resetTxSTminTimer(fc.STmin)
 
-		// Check WFT
-		// Uses a hardcoded limit for now as it's not in standard config usually, or add to config?
-		// Let's use a safe default constant.
-		const MaxWaitFrames = 20
-		if t.wftCounter > MaxWaitFrames {
-			t.fireError(errors.New("错误：等待帧(Wait Frame)数量超出最大限制"))
-			t.stopSending()
-		} else {
-			t.resetTxFCTimer()
-		}
+	case FlowStatusWait:
+		t.resetTxFCTimer()
 
 	case FlowStatusOverflow:
 		t.fireError(errors.New("错误：对方缓冲区溢出，停止发送"))
@@ -137,7 +119,7 @@ func (t *Transport) handleTxTransmit(txChan chan<- CanMessage) {
 	t.txSeqNum = (t.txSeqNum + 1) % 16
 	t.txBlockCounter++
 
-	msg := t.makeTxMsg(data, Physical)
+	msg := t.makeTxMsg(data)
 	txChan <- msg
 
 	if len(t.txBuffer) == 0 {
@@ -148,14 +130,14 @@ func (t *Transport) handleTxTransmit(txChan chan<- CanMessage) {
 	}
 
 	// Determine next step
-	if t.remoteBlocksize > 0 && t.txBlockCounter >= t.remoteBlocksize {
+	if t.remoteBlockSize > 0 && t.txBlockCounter >= t.remoteBlockSize {
 		// Block finished, wait for FC
 		t.txState = StateWaitFC
 		t.resetTxFCTimer()
 	} else {
 		// Continue sending after STmin
 		// Use the stored stmin value (we parsed it from FC)
-		t.resetTxSTminTimer(t.remoteStmin)
+		t.resetTxSTminTimer(t.remoteSTmin)
 	}
 }
 

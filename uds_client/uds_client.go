@@ -16,7 +16,6 @@ import (
 // 这允许我们在测试中注入 Mock 对象
 type Transport interface {
 	Send(data []byte)
-	Recv() ([]byte, bool)
 	RecvChan() <-chan []byte
 	SetTxAddress(addr *isotp.Address)
 	SetFDMode(isFD bool)
@@ -25,8 +24,8 @@ type Transport interface {
 
 // 通道缓冲区大小常量
 const (
-	adapterRxBufferSize    = 100                     // 适配器接收缓冲区大小
-	adapterTxBufferSize    = 1024                    // 适配器发送缓冲区（大块 0x36 + STmin=0 时 CF 突发，适当加大）
+	driverRxBufferSize     = 100                     // 驱动接收缓冲区大小
+	driverTxBufferSize     = 1024                    // 驱动发送缓冲区（大块请求 + STmin=0 时 CF 突发，适当加大）
 	responsePendingTimeout = 5000 * time.Millisecond // Response Pending 超时
 	defaultMaxRetries      = 3                       // 默认最大重试次数
 )
@@ -236,7 +235,7 @@ func getNRCDescription(nrc byte) string {
 // UDSClient 是一个高级客户端，封装了所有初始化和通信的复杂性
 type UDSClient struct {
 	stack     Transport // 使用接口而非具体结构体
-	adapter   *driver.Adapter
+	driver    driver.CANDriver
 	cancel    context.CancelFunc // 用于控制所有后台goroutine的生命周期
 	ctx       context.Context    // 客户端生命周期 context
 	txErrChan chan error
@@ -247,58 +246,70 @@ type UDSClient struct {
 
 // NewUDSClient 是新的构造函数，负责完成所有组件的初始化和连接。
 func NewUDSClient(dev driver.CANDriver, addr *isotp.Address, cfg isotp.Config) (*UDSClient, error) {
-	// 1. 初始化适配器并启动硬件驱动
-	adapter, err := driver.NewAdapter(dev)
-	if err != nil {
-		return nil, fmt.Errorf("The adapter cannot be created.: %w", err)
+	if err := addr.Validate(); err != nil {
+		return nil, fmt.Errorf("invalid ISO-TP address: %w", err)
 	}
+	if dev == nil {
+		return nil, errors.New("CAN driver instance cannot be nil")
+	}
+	if err := dev.Init(); err != nil {
+		return nil, fmt.Errorf("failed to initialize CAN device: %w", err)
+	}
+	dev.Start()
 
-	// 2. 初始化ISOTP协议栈
 	stack := isotp.NewTransport(addr, cfg)
-	if isFD, ok := driver.DetectFDMode(dev); ok {
-		stack.SetFDMode(isFD)
-	}
+	stack.SetFDMode(dev.IsFDMode())
 
-	return newUDSClient(adapter, stack), nil
+	return newUDSClient(dev, stack), nil
 }
 
 // newUDSClient 内部构造函数，支持依赖注入
-func newUDSClient(adapter *driver.Adapter, stack Transport) *UDSClient {
+func newUDSClient(dev driver.CANDriver, stack Transport) *UDSClient {
 	// 3. 创建用于goroutine生命周期管理的context
 	ctx, cancel := context.WithCancel(context.Background())
 	txErrChan := make(chan error, 16)
 
-	// 4. 创建内部通信channels，作为协议栈和适配器之间的桥梁
-	rxFromAdapter := make(chan isotp.CanMessage, adapterRxBufferSize)
-	txToAdapter := make(chan isotp.CanMessage, adapterTxBufferSize)
+	// 4. 创建内部通信channels，作为协议栈和驱动之间的桥梁
+	rxFromDriver := make(chan isotp.CanMessage, driverRxBufferSize)
+	txToDriver := make(chan isotp.CanMessage, driverTxBufferSize)
+	driverRx := dev.RxChan()
 
 	// 5. 启动所有必要的后台goroutines ("粘合"逻辑)
-	// a. 从适配器接收数据，送入协议栈
+	// a. 从驱动接收数据，转换后送入协议栈
 	go func() {
 		for {
-			msg, ok := adapter.RxFuncWithContext(ctx)
-			if !ok {
-				return
-			}
 			select {
 			case <-ctx.Done():
 				return
-			case rxFromAdapter <- msg:
+			case raw, ok := <-driverRx:
+				if !ok {
+					return
+				}
+				msg, accepted := convertRXMessage(raw)
+				if !accepted {
+					continue
+				}
+				select {
+				case <-ctx.Done():
+					return
+				case rxFromDriver <- msg:
+				}
 			}
 		}
 	}()
 
-	// b. 从协议栈获取待发送数据，通过适配器发送
+	// b. 从协议栈获取待发送数据，通过驱动发送
 	go func() {
 		for {
 			select {
 			case <-ctx.Done():
 				return
-			case msg, ok := <-txToAdapter:
+			case msg, ok := <-txToDriver:
 				if !ok {
 					return
 				}
-				if err := adapter.TxFunc(msg); err != nil {
+				if err := dev.Write(int32(msg.ArbitrationID), msg.IsFD, msg.Data); err != nil {
+					err = fmt.Errorf("failed to send CAN frame (id=0x%X): %w", msg.ArbitrationID, err)
 					select {
 					case <-ctx.Done():
 						return
@@ -312,7 +323,7 @@ func newUDSClient(adapter *driver.Adapter, stack Transport) *UDSClient {
 
 	// c. 驱动协议栈核心状态机
 	go func() {
-		stack.Run(ctx, rxFromAdapter, txToAdapter)
+		stack.Run(ctx, rxFromDriver, txToDriver)
 	}()
 
 	// d. 监听协议栈错误 logging (仅当 stack 是具体类型时，或者扩展接口支持 ErrorChan)
@@ -336,7 +347,7 @@ func newUDSClient(adapter *driver.Adapter, stack Transport) *UDSClient {
 	log.Println("UDS客户端已成功初始化并启动。")
 	return &UDSClient{
 		stack:     stack,
-		adapter:   adapter,
+		driver:    dev,
 		cancel:    cancel,
 		ctx:       ctx,
 		txErrChan: txErrChan,
@@ -346,8 +357,8 @@ func newUDSClient(adapter *driver.Adapter, stack Transport) *UDSClient {
 
 // SetFunctionalAddress sets the functional address used when AddressFunctional is active.
 func (c *UDSClient) SetFunctionalAddress(addr *isotp.Address) error {
-	if addr == nil {
-		return errors.New("functional address cannot be nil")
+	if err := addr.Validate(); err != nil {
+		return fmt.Errorf("invalid functional address: %w", err)
 	}
 	c.reqMu.Lock()
 	defer c.reqMu.Unlock()
@@ -610,16 +621,11 @@ func (c *UDSClient) RequestWithTimeout(payload []byte, timeout time.Duration) ([
 	return c.RequestWithContext(context.Background(), payload, opts)
 }
 
-// SetFDMode 允许动态切换CAN FD模式。
-func (c *UDSClient) SetFDMode(isFD bool) {
-	c.stack.SetFDMode(isFD)
-}
-
 // Close 优雅地关闭客户端，释放所有资源。
 func (c *UDSClient) Close() {
 	log.Println("正在关闭UDS客户端...")
-	c.cancel()        // 发送信号，停止所有后台goroutines
-	c.adapter.Close() // 调用适配器的方法，关闭硬件驱动
+	c.cancel()
+	c.driver.Stop()
 }
 
 // IsClosed 检查客户端是否已关闭

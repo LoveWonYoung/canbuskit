@@ -19,24 +19,16 @@ type Preset struct {
 	CanDevice driver.CANDriver
 	Client    *uds_client.UDSClient
 	readMu    sync.Mutex
-	rxChan    <-chan driver.UnifiedCANMessage
+	rxChan    <-chan driver.CanFrame
 }
 
-func newPreset(drv driver.CANDriver, physId, respId, funcId uint32, fd bool) (*Preset, error) {
-	physAddr, err := tp_layer.NewAddress(
-		tp_layer.Normal11Bit,
-		tp_layer.WithTxID(physId),
-		tp_layer.WithRxID(respId),
-	)
+func newPreset(drv driver.CANDriver, physId, respId, funcId uint32) (*Preset, error) {
+	physAddr, err := tp_layer.NewAddress(physId, respId)
 	if err != nil {
 		return nil, fmt.Errorf("build physical address: %w", err)
 	}
 
-	funcAddr, err := tp_layer.NewAddress(
-		tp_layer.Normal11Bit,
-		tp_layer.WithTxID(funcId),
-		tp_layer.WithRxID(respId),
-	)
+	funcAddr, err := tp_layer.NewAddress(funcId, respId)
 	if err != nil {
 		return nil, fmt.Errorf("build functional address: %w", err)
 	}
@@ -53,10 +45,6 @@ func newPreset(drv driver.CANDriver, physId, respId, funcId uint32, fd bool) (*P
 		client.Close()
 		return nil, fmt.Errorf("set functional address: %w", err)
 	}
-	if fd {
-		client.SetFDMode(true)
-	}
-
 	return &Preset{
 		PhysId:    physId,
 		RespId:    respId,
@@ -84,7 +72,7 @@ func (p *Preset) Write(id int32, fd bool, data []byte) error {
 	return p.CanDevice.Write(id, fd, data)
 }
 
-func (p *Preset) Read() <-chan driver.UnifiedCANMessage {
+func (p *Preset) Read() <-chan driver.CanFrame {
 	if p == nil || p.CanDevice == nil {
 		return nil
 	}
