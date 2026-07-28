@@ -28,7 +28,7 @@ func DefaultAutoCandidates() []AutoCandidate {
 	}
 }
 
-// AutoDriver selects the first available, mode-compatible CAN device driver.
+// AutoDriver selects the first available, mode-compatible CAN device can_driver.
 type AutoDriver struct {
 	canType      CanType
 	cfg          Config
@@ -42,7 +42,7 @@ func NewAutoDriver(canType CanType) *AutoDriver {
 	return NewAutoDriverWithConfig(DefaultConfig(canType, CHANNEL1))
 }
 
-// NewAutoDriverWithConfig creates an automatic driver selector. If no
+// NewAutoDriverWithConfig creates an automatic can_driver selector. If no
 // candidates are supplied, DefaultAutoCandidates is used.
 func NewAutoDriverWithConfig(cfg Config, candidates ...AutoCandidate) *AutoDriver {
 	if len(candidates) == 0 {
@@ -77,12 +77,12 @@ func (a *AutoDriver) Init() error {
 		}
 		dev := candidate.New(cfg)
 		if dev == nil {
-			errs = append(errs, fmt.Sprintf("%s: candidate returned nil driver", strings.ToLower(candidate.Name)))
+			errs = append(errs, fmt.Sprintf("%s: candidate returned nil can_driver", strings.ToLower(candidate.Name)))
 			continue
 		}
 		if err := dev.Init(); err != nil {
 			dev.Stop()
-			log.Printf("Auto driver: %s init failed: %v", candidate.Name, err)
+			log.Printf("Auto can_driver: %s init failed: %v", candidate.Name, err)
 			errs = append(errs, fmt.Sprintf("%s: %v", strings.ToLower(candidate.Name), err))
 			continue
 		}
@@ -91,13 +91,13 @@ func (a *AutoDriver) Init() error {
 		if isFD != wantFD {
 			dev.Stop()
 			err := fmt.Errorf("initialized in incompatible mode (want CAN-FD=%t, got CAN-FD=%t)", wantFD, isFD)
-			log.Printf("Auto driver: %s rejected: %v", candidate.Name, err)
+			log.Printf("Auto can_driver: %s rejected: %v", candidate.Name, err)
 			errs = append(errs, fmt.Sprintf("%s: %v", strings.ToLower(candidate.Name), err))
 			continue
 		}
 		a.driver = dev
 		a.selectedName = candidate.Name
-		log.Printf("Auto driver selected: %s", candidate.Name)
+		log.Printf("Auto can_driver selected: %s", candidate.Name)
 		return nil
 	}
 
@@ -105,11 +105,21 @@ func (a *AutoDriver) Init() error {
 }
 
 func (a *AutoDriver) Start() {
-	if drv := a.getDriver(); drv != nil {
-		drv.Start()
-		return
+	if err := a.StartWithError(); err != nil {
+		log.Printf("Auto can_driver start failed: %v", err)
 	}
-	log.Println("Auto driver start called before init")
+}
+
+func (a *AutoDriver) StartWithError() error {
+	drv := a.getDriver()
+	if drv == nil {
+		return fmt.Errorf("%w: AutoDriver", ErrDriverNotInitialized)
+	}
+	if starter, ok := drv.(ErrorStartingCANDriver); ok {
+		return starter.StartWithError()
+	}
+	drv.Start()
+	return nil
 }
 
 func (a *AutoDriver) Stop() {
@@ -127,14 +137,43 @@ func (a *AutoDriver) Write(id int32, fd bool, data []byte) error {
 	if drv := a.getDriver(); drv != nil {
 		return drv.Write(id, fd, data)
 	}
-	return errors.New("driver not initialized")
+	return errors.New("can_driver not initialized")
 }
 
-func (a *AutoDriver) RxChan() <-chan UnifiedCANMessage {
+func (a *AutoDriver) RxChan() <-chan CanFrame {
 	if drv := a.getDriver(); drv != nil {
 		return drv.RxChan()
 	}
 	return nil
+}
+
+func (a *AutoDriver) SubscribeRx(buffer int) (<-chan CanFrame, func()) {
+	drv := a.getDriver()
+	if drv == nil {
+		return nil, func() {}
+	}
+	if subscriber, ok := drv.(RxSubscriber); ok {
+		return subscriber.SubscribeRx(buffer)
+	}
+	return drv.RxChan(), func() {}
+}
+
+func (a *AutoDriver) Errors() <-chan error {
+	if drv := a.getDriver(); drv != nil {
+		if observable, ok := drv.(ObservableCANDriver); ok {
+			return observable.Errors()
+		}
+	}
+	return closedDriverErrors
+}
+
+func (a *AutoDriver) Stats() DriverStats {
+	if drv := a.getDriver(); drv != nil {
+		if observable, ok := drv.(ObservableCANDriver); ok {
+			return observable.Stats()
+		}
+	}
+	return DriverStats{}
 }
 
 func (a *AutoDriver) IsFDMode() bool {

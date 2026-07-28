@@ -7,7 +7,7 @@ import (
 )
 
 func TestConvertRXMessageDropsTXEchoAndNonStandardID(t *testing.T) {
-	if _, ok := convertRXMessage(driver.UnifiedCANMessage{
+	if _, ok := convertRXMessage(driver.CanFrame{
 		Direction: driver.TX,
 		ID:        0x123,
 		DLC:       1,
@@ -15,7 +15,7 @@ func TestConvertRXMessageDropsTXEchoAndNonStandardID(t *testing.T) {
 		t.Fatal("TX echo was passed to ISO-TP")
 	}
 
-	if _, ok := convertRXMessage(driver.UnifiedCANMessage{
+	if _, ok := convertRXMessage(driver.CanFrame{
 		Direction: driver.RX,
 		ID:        0x800,
 		DLC:       1,
@@ -25,7 +25,7 @@ func TestConvertRXMessageDropsTXEchoAndNonStandardID(t *testing.T) {
 }
 
 func TestConvertRXMessageConvertsStandardFrame(t *testing.T) {
-	raw := driver.UnifiedCANMessage{
+	raw := driver.CanFrame{
 		Direction: driver.RX,
 		ID:        0x7E8,
 		DLC:       3,

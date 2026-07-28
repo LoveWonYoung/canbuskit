@@ -71,7 +71,8 @@ type pcanTimestamp struct {
 }
 
 type PCAN struct {
-	rxChan     chan UnifiedCANMessage
+	driverObservability
+	rxChan     chan CanFrame
 	fanout     *rxFanout
 	ctx        context.Context
 	cancel     context.CancelFunc
@@ -125,14 +126,15 @@ func (p *PCAN) Init() error {
 	p.canType = cfg.Mode
 	p.CANChannel = cfg.Channel
 	p.ctx, p.cancel = context.WithCancel(context.Background())
-	p.rxChan = make(chan UnifiedCANMessage, cfg.RxBufferSize)
-	p.fanout = newRxFanout(p.ctx, p.rxChan)
+	p.rxChan = make(chan CanFrame, cfg.RxBufferSize)
+	p.fanout = newRxFanout(p.ctx, p.rxChan, p.resetTelemetry())
 	cleanup := func(err error) error {
 		p.cancel()
 		p.fanout.Close()
 		close(p.rxChan)
 		p.fanout = nil
 		p.rxChan = nil
+		p.closeTelemetry()
 		return err
 	}
 
@@ -163,16 +165,22 @@ func (p *PCAN) Init() error {
 }
 
 func (p *PCAN) Start() {
+	if err := p.StartWithError(); err != nil {
+		log.Printf("PCAN start failed: %v", err)
+	}
+}
+
+func (p *PCAN) StartWithError() error {
 	p.lifecycle.opMu.Lock()
 	defer p.lifecycle.opMu.Unlock()
 	if !p.lifecycle.isInitialized() {
-		log.Println("PCAN start called before successful initialization")
-		return
+		return fmt.Errorf("%w: PCAN", ErrDriverNotInitialized)
 	}
 	p.drainInitialBuffer()
 	if p.lifecycle.start(p.readLoop) {
-		log.Println("PCAN driver started...")
+		log.Println("PCAN can_driver started...")
 	}
+	return nil
 }
 
 func (p *PCAN) Stop() {
@@ -191,6 +199,7 @@ func (p *PCAN) Stop() {
 		close(p.rxChan)
 		p.rxChan = nil
 	}
+	p.closeTelemetry()
 }
 
 func (p *PCAN) Write(id int32, fd bool, data []byte) error {
@@ -250,13 +259,23 @@ func (p *PCAN) Write(id int32, fd bool, data []byte) error {
 	}
 }
 
-func (p *PCAN) RxChan() <-chan UnifiedCANMessage {
+func (p *PCAN) RxChan() <-chan CanFrame {
 	p.lifecycle.opMu.Lock()
 	defer p.lifecycle.opMu.Unlock()
 	if p.fanout == nil {
 		return nil
 	}
-	return p.fanout.Subscribe(p.cfg.RxBufferSize)
+	ch, _ := p.fanout.Subscribe(p.cfg.RxBufferSize)
+	return ch
+}
+
+func (p *PCAN) SubscribeRx(buffer int) (<-chan CanFrame, func()) {
+	p.lifecycle.opMu.Lock()
+	defer p.lifecycle.opMu.Unlock()
+	if p.fanout == nil {
+		return nil, func() {}
+	}
+	return p.fanout.Subscribe(buffer)
 }
 
 func (p *PCAN) Config() Config {
@@ -334,7 +353,7 @@ func pcanDLLCandidates() []string {
 		add(filepath.Join(envDir, pcanDLLName))
 	}
 
-	add(filepath.Join(".", "bin", archDLLDir(), pcanDLLName))
+	add(filepath.Join(".", "bin", pcanDLLName))
 	add(pcanDLLName)
 
 	programRoots := []string{
@@ -480,7 +499,7 @@ func (p *PCAN) enqueueMessage(id uint32, dlc byte, data []byte, msgType uint8) {
 		msgTypeLabel = CANFD
 	}
 
-	var unified UnifiedCANMessage
+	var unified CanFrame
 	unified.Direction = RX
 	if msgType&pcanMessageEcho != 0 {
 		unified.Direction = TX
@@ -496,11 +515,7 @@ func (p *PCAN) enqueueMessage(id uint32, dlc byte, data []byte, msgType uint8) {
 	payloadLen := dlcToLen(dlc)
 	logCANMessage("RX", unified.ID, unified.DLC, unified.Data[:payloadLen], msgTypeLabel)
 
-	select {
-	case p.rxChan <- unified:
-	default:
-		log.Println("Warning: receive channel full, dropping message")
-	}
+	p.publishRx(p.ctx, p.rxChan, unified)
 }
 
 func (p *PCAN) callRead(msg *pcanMsg, ts *pcanTimestamp) uint32 {

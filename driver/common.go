@@ -2,6 +2,7 @@ package driver
 
 import (
 	"context"
+	"errors"
 	"log"
 	"sync"
 )
@@ -76,8 +77,8 @@ func logCANMessage(direction string, id uint32, dlc byte, data []byte, canType C
 	log.Printf(format, direction, typeStr, id, dlc, data)
 }
 
-// UnifiedCANMessage 是一个通用的CAN/CAN-FD消息结构体，用于在channel中传递,它屏蔽了底层 CAN_MSG 和 CANFD_MSG 的差异。
-type UnifiedCANMessage struct {
+// CanFrame 是一个通用的CAN/CAN-FD消息结构体，用于在channel中传递,它屏蔽了底层 CAN_MSG 和 CANFD_MSG 的差异。
+type CanFrame struct {
 	Direction DirectionType
 	ID        uint32
 	DLC       byte
@@ -86,7 +87,7 @@ type UnifiedCANMessage struct {
 }
 
 // DataLength returns the payload length represented by DLC.
-func (m UnifiedCANMessage) DataLength() int {
+func (m CanFrame) DataLength() int {
 	return dlcToLen(m.DLC)
 }
 
@@ -96,8 +97,16 @@ type CANDriver interface {
 	Start()
 	Stop()
 	Write(id int32, fd bool, data []byte) error
-	RxChan() <-chan UnifiedCANMessage
+	RxChan() <-chan CanFrame
 	IsFDMode() bool
+}
+
+var ErrDriverNotInitialized = errors.New("CAN driver is not initialized")
+
+// ErrorStartingCANDriver is an optional extension for drivers that can report
+// startup failures without changing the legacy CANDriver interface.
+type ErrorStartingCANDriver interface {
+	StartWithError() error
 }
 
 // driverLifecycle serializes initialization/cleanup and makes the read loop

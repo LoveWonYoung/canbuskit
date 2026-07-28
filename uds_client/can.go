@@ -5,7 +5,7 @@ import (
 	isotp "github.com/LoveWonYoung/canbuskit/tp_layer"
 )
 
-func convertRXMessage(raw driver.UnifiedCANMessage) (isotp.CanMessage, bool) {
+func convertRXMessage(raw driver.CanFrame) (isotp.CanMessage, bool) {
 	if raw.Direction == driver.TX || raw.ID > 0x7FF {
 		return isotp.CanMessage{}, false
 	}

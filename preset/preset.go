@@ -19,7 +19,7 @@ type Preset struct {
 	CanDevice driver.CANDriver
 	Client    *uds_client.UDSClient
 	readMu    sync.Mutex
-	rxChan    <-chan driver.UnifiedCANMessage
+	rxChan    <-chan driver.CanFrame
 }
 
 func newPreset(drv driver.CANDriver, physId, respId, funcId uint32) (*Preset, error) {
@@ -72,7 +72,7 @@ func (p *Preset) Write(id int32, fd bool, data []byte) error {
 	return p.CanDevice.Write(id, fd, data)
 }
 
-func (p *Preset) Read() <-chan driver.UnifiedCANMessage {
+func (p *Preset) Read() <-chan driver.CanFrame {
 	if p == nil || p.CanDevice == nil {
 		return nil
 	}

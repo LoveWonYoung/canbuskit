@@ -18,11 +18,11 @@ func (d *autoTestDriver) Init() error {
 	d.initCall++
 	return d.initErr
 }
-func (d *autoTestDriver) Start()                           {}
-func (d *autoTestDriver) Stop()                            { d.stopped = true }
-func (d *autoTestDriver) Write(int32, bool, []byte) error  { return nil }
-func (d *autoTestDriver) RxChan() <-chan UnifiedCANMessage { return nil }
-func (d *autoTestDriver) IsFDMode() bool                   { return d.fd }
+func (d *autoTestDriver) Start()                          {}
+func (d *autoTestDriver) Stop()                           { d.stopped = true }
+func (d *autoTestDriver) Write(int32, bool, []byte) error { return nil }
+func (d *autoTestDriver) RxChan() <-chan CanFrame         { return nil }
+func (d *autoTestDriver) IsFDMode() bool                  { return d.fd }
 
 func TestAutoDriverCleansFailuresAndRejectsModeMismatch(t *testing.T) {
 	failed := &autoTestDriver{initErr: errors.New("not available"), fd: true}

@@ -14,7 +14,6 @@ import (
 	"syscall"
 	"time"
 
-	// "time"
 	"unsafe"
 
 	"golang.org/x/sys/windows/registry"
@@ -340,9 +339,10 @@ func DefaultTSMasterMapping(hardwareChannel byte) TSMasterMapping {
 }
 
 type TSMaster struct {
+	driverObservability
 	loader      *TSMasterLoader
 	isConnected bool
-	rxChan      chan UnifiedCANMessage
+	rxChan      chan CanFrame
 	fanout      *rxFanout
 	ctx         context.Context
 	cancel      context.CancelFunc
@@ -405,8 +405,8 @@ func (t *TSMaster) Init() error {
 	t.ctx, t.cancel = context.WithCancel(context.Background())
 
 	// 初始化接收通道
-	t.rxChan = make(chan UnifiedCANMessage, cfg.RxBufferSize)
-	t.fanout = newRxFanout(t.ctx, t.rxChan)
+	t.rxChan = make(chan CanFrame, cfg.RxBufferSize)
+	t.fanout = newRxFanout(t.ctx, t.rxChan, t.resetTelemetry())
 
 	cleanup := func(err error) error {
 		if t.cancel != nil {
@@ -427,6 +427,7 @@ func (t *TSMaster) Init() error {
 			close(t.rxChan)
 			t.rxChan = nil
 		}
+		t.closeTelemetry()
 		t.isConnected = false
 		return err
 	}
@@ -554,15 +555,21 @@ func (t *TSMaster) Init() error {
 	return nil
 }
 func (t *TSMaster) Start() {
+	if err := t.StartWithError(); err != nil {
+		log.Printf("TSMaster start failed: %v", err)
+	}
+}
+
+func (t *TSMaster) StartWithError() error {
 	t.lifecycle.opMu.Lock()
 	defer t.lifecycle.opMu.Unlock()
 	if !t.lifecycle.isInitialized() || !t.isConnected {
-		fmt.Println("TSMaster not connected, cannot start")
-		return
+		return fmt.Errorf("%w: TSMaster", ErrDriverNotInitialized)
 	}
 	if t.lifecycle.start(t.readLoop) {
 		fmt.Println("TSMaster started")
 	}
+	return nil
 }
 func (t *TSMaster) readLoop() {
 	ticker := time.NewTicker(t.cfg.PollingInterval)
@@ -604,7 +611,7 @@ func (t *TSMaster) readLoop() {
 					continue
 				}
 
-				var unifiedMsg UnifiedCANMessage
+				var unifiedMsg CanFrame
 				// 使用统一的日志函数
 				msgType := t.canType
 				if msg.FFDProperties&1 == 0 {
@@ -614,7 +621,7 @@ func (t *TSMaster) readLoop() {
 				}
 				switch canfdMsg[i].FProperties & tsCANPropertyTX {
 				case 0:
-					unifiedMsg = UnifiedCANMessage{
+					unifiedMsg = CanFrame{
 						Direction: RX, ID: uint32(msg.FIdentifier), DLC: msg.FDLC, Data: msg.FData, IsFD: msg.FFDProperties&1 == 1,
 					}
 
@@ -623,21 +630,18 @@ func (t *TSMaster) readLoop() {
 					if !t.cfg.IncludeTxEcho {
 						continue
 					}
-					unifiedMsg = UnifiedCANMessage{
+					unifiedMsg = CanFrame{
 						Direction: TX, ID: uint32(msg.FIdentifier), DLC: msg.FDLC, Data: msg.FData, IsFD: msg.FFDProperties&1 == 1,
 					}
 					logCANMessage("TX", unifiedMsg.ID, unifiedMsg.DLC, unifiedMsg.Data[:dlcToLen(unifiedMsg.DLC)], msgType)
 				}
 
-				select {
-				case t.rxChan <- unifiedMsg:
-				default:
-					log.Println("警告: 驱动接收channel(FD)已满，消息被丢弃")
-				}
+				t.publishRx(t.ctx, t.rxChan, unifiedMsg)
 			}
 		}
 	}
 }
+
 func (t *TSMaster) Stop() {
 	t.lifecycle.opMu.Lock()
 	defer t.lifecycle.opMu.Unlock()
@@ -663,7 +667,7 @@ func (t *TSMaster) Stop() {
 		close(t.rxChan)
 		t.rxChan = nil
 	}
-
+	t.closeTelemetry()
 	fmt.Println("TSMaster stopped")
 }
 func (t *TSMaster) Write(id int32, fd bool, data []byte) error {
@@ -696,13 +700,23 @@ func (t *TSMaster) Write(id int32, fd bool, data []byte) error {
 	}
 	return nil
 }
-func (t *TSMaster) RxChan() <-chan UnifiedCANMessage {
+func (t *TSMaster) RxChan() <-chan CanFrame {
 	t.lifecycle.opMu.Lock()
 	defer t.lifecycle.opMu.Unlock()
 	if t.fanout == nil {
 		return nil
 	}
-	return t.fanout.Subscribe(t.cfg.RxBufferSize)
+	ch, _ := t.fanout.Subscribe(t.cfg.RxBufferSize)
+	return ch
+}
+
+func (t *TSMaster) SubscribeRx(buffer int) (<-chan CanFrame, func()) {
+	t.lifecycle.opMu.Lock()
+	defer t.lifecycle.opMu.Unlock()
+	if t.fanout == nil {
+		return nil, func() {}
+	}
+	return t.fanout.Subscribe(buffer)
 }
 func (t *TSMaster) IsFDMode() bool {
 	t.lifecycle.opMu.Lock()
