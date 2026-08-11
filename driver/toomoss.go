@@ -565,6 +565,20 @@ func defaultCANFDInitConfig() CANFD_INIT_CONFIG {
 	}
 }
 
+// BuildCANFDInitConfig merges shared timing into Toomoss defaults (Mode/RetrySend/...).
+func BuildCANFDInitConfig(timing CANFDInitConfig) CANFD_INIT_CONFIG {
+	cfg := defaultCANFDInitConfig()
+	cfg.NBT_BRP = timing.NBT_BRP
+	cfg.NBT_SEG1 = timing.NBT_SEG1
+	cfg.NBT_SEG2 = timing.NBT_SEG2
+	cfg.NBT_SJW = timing.NBT_SJW
+	cfg.DBT_BRP = timing.DBT_BRP
+	cfg.DBT_SEG1 = timing.DBT_SEG1
+	cfg.DBT_SEG2 = timing.DBT_SEG2
+	cfg.DBT_SJW = timing.DBT_SJW
+	return cfg
+}
+
 type Toomoss struct {
 	driverObservability
 	rxChan          chan CanFrame
@@ -598,6 +612,18 @@ func NewToomossWithConfig(cfg Config) *Toomoss {
 
 func (c *Toomoss) SetCANFDInitConfig(cfg CANFD_INIT_CONFIG) {
 	c.canFDInitConfig = cfg
+}
+
+// SetCANFDTiming applies shared timing fields while keeping Mode/RetrySend/ISOCRC/ResEnable.
+func (c *Toomoss) SetCANFDTiming(timing CANFDInitConfig) {
+	c.canFDInitConfig.NBT_BRP = timing.NBT_BRP
+	c.canFDInitConfig.NBT_SEG1 = timing.NBT_SEG1
+	c.canFDInitConfig.NBT_SEG2 = timing.NBT_SEG2
+	c.canFDInitConfig.NBT_SJW = timing.NBT_SJW
+	c.canFDInitConfig.DBT_BRP = timing.DBT_BRP
+	c.canFDInitConfig.DBT_SEG1 = timing.DBT_SEG1
+	c.canFDInitConfig.DBT_SEG2 = timing.DBT_SEG2
+	c.canFDInitConfig.DBT_SJW = timing.DBT_SJW
 }
 
 func decodeToomossClassicFlags(remoteFlag, externFlag byte) (channel byte, remote bool, extended bool, errorFrame bool, txEcho bool) {

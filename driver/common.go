@@ -100,6 +100,37 @@ type CANDriver interface {
 	RxChan() <-chan CanFrame
 	IsFDMode() bool
 }
+type CANFDInitConfig struct {
+	NBT_BRP  byte
+	NBT_SEG1 byte
+	NBT_SEG2 byte
+	NBT_SJW  byte
+	DBT_BRP  byte
+	DBT_SEG1 byte
+	DBT_SEG2 byte
+	DBT_SJW  byte
+}
+
+func (cfg CANFDInitConfig) ValidateTiming() error {
+	if cfg.NBT_SEG1 == 0 || cfg.NBT_SEG2 == 0 || cfg.NBT_SJW == 0 {
+		return errors.New("CAN FD nominal timing (NBT_SEG1/SEG2/SJW) must be non-zero")
+	}
+	if cfg.DBT_SEG1 == 0 || cfg.DBT_SEG2 == 0 || cfg.DBT_SJW == 0 {
+		return errors.New("CAN FD data timing (DBT_SEG1/SEG2/SJW) must be non-zero")
+	}
+	return nil
+}
+
+// ValidateWithBRP checks timing segments and BRP (required by Toomoss/PCAN bitrate strings).
+func (cfg CANFDInitConfig) ValidateWithBRP() error {
+	if err := cfg.ValidateTiming(); err != nil {
+		return err
+	}
+	if cfg.NBT_BRP == 0 || cfg.DBT_BRP == 0 {
+		return errors.New("CAN FD BRP (NBT_BRP/DBT_BRP) must be non-zero")
+	}
+	return nil
+}
 
 var ErrDriverNotInitialized = errors.New("CAN driver is not initialized")
 
