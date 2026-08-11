@@ -82,6 +82,9 @@ type PCAN struct {
 	handle     uint16
 	CANChannel byte
 
+	canFDTiming    CANFDInitConfig
+	hasCANFDTiming bool
+
 	dll              *syscall.LazyDLL
 	initProc         *syscall.LazyProc
 	initFDProc       *syscall.LazyProc
@@ -109,6 +112,13 @@ func NewPCANWithConfig(cfg Config) *PCAN {
 		handle:     handle,
 		CANChannel: cfg.Channel,
 	}
+}
+
+// SetCANFDInitConfig sets explicit CAN-FD bit timing used by CAN_InitializeFD.
+// When set, NominalBitrate/DataBitrate are not used to derive the FD bitrate string.
+func (p *PCAN) SetCANFDInitConfig(cfg CANFDInitConfig) {
+	p.canFDTiming = cfg
+	p.hasCANFDTiming = true
 }
 
 func (p *PCAN) Init() error {
@@ -309,9 +319,17 @@ func (p *PCAN) initFD() error {
 	if p.initFDProc == nil {
 		return errors.New("pcan init fd procedure not loaded")
 	}
-	bitrateConfig, err := pcanFDBitrate(p.cfg.NominalBitrate, p.cfg.DataBitrate)
-	if err != nil {
-		return err
+	var (
+		bitrateConfig string
+		err           error
+	)
+	if p.hasCANFDTiming {
+		bitrateConfig = pcanFDBitrateFromTiming(p.canFDTiming)
+	} else {
+		bitrateConfig, err = pcanFDBitrate(p.cfg.NominalBitrate, p.cfg.DataBitrate)
+		if err != nil {
+			return err
+		}
 	}
 	bitrate, err := syscall.BytePtrFromString(bitrateConfig)
 	if err != nil {
@@ -643,6 +661,14 @@ func pcanFDBitrate(nominal, data uint32) (string, error) {
 		nomBRP, nomTseg1, nomTseg2, min(nomTseg2, 4),
 		dataBRP, dataTseg1, dataTseg2, min(dataTseg2, 4),
 	), nil
+}
+
+func pcanFDBitrateFromTiming(cfg CANFDInitConfig) string {
+	return fmt.Sprintf(
+		"f_clock_mhz=80,nom_brp=%d,nom_tseg1=%d,nom_tseg2=%d,nom_sjw=%d,data_brp=%d,data_tseg1=%d,data_tseg2=%d,data_sjw=%d",
+		cfg.NBT_BRP, cfg.NBT_SEG1, cfg.NBT_SEG2, cfg.NBT_SJW,
+		cfg.DBT_BRP, cfg.DBT_SEG1, cfg.DBT_SEG2, cfg.DBT_SJW,
+	)
 }
 
 func findPCANBitTiming(bitrate uint32, maxTseg1, maxTseg2 int) (brp, tseg1, tseg2 int, err error) {

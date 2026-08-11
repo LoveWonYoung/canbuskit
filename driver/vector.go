@@ -175,6 +175,14 @@ type Vector struct {
 	channelMask    uint64
 	permissionMask uint64
 
+	// CAN-FD bit timing (Vector uses bitrate + SJW/TSEG; BRP is ignored).
+	canFdSjwAbr   uint32
+	canFdTseg1Abr uint32
+	canFdTseg2Abr uint32
+	canFdSjwDbr   uint32
+	canFdTseg1Dbr uint32
+	canFdTseg2Dbr uint32
+
 	DeviceType int
 	CANChannel int
 }
@@ -186,15 +194,32 @@ func NewVector(canType CanType, deviceType int, canChannel int) *Vector {
 func NewVectorWithConfig(cfg Config, deviceType int) *Vector {
 	ctx, cancel := context.WithCancel(context.Background())
 	return &Vector{
-		canType:    cfg.Mode,
-		cfg:        cfg,
-		fanout:     nil,
-		ctx:        ctx,
-		cancel:     cancel,
-		portHandle: vectorInvalidPortHandle,
-		DeviceType: deviceType,
-		CANChannel: int(cfg.Channel),
+		canType:       cfg.Mode,
+		cfg:           cfg,
+		fanout:        nil,
+		ctx:           ctx,
+		cancel:        cancel,
+		portHandle:    vectorInvalidPortHandle,
+		canFdSjwAbr:   vectorDefaultCanFdSJW,
+		canFdTseg1Abr: vectorDefaultCanFdTseg1,
+		canFdTseg2Abr: vectorDefaultCanFdTseg2,
+		canFdSjwDbr:   vectorDefaultCanFdSJW,
+		canFdTseg1Dbr: vectorDefaultCanFdTseg1,
+		canFdTseg2Dbr: vectorDefaultCanFdTseg2,
+		DeviceType:    deviceType,
+		CANChannel:    int(cfg.Channel),
 	}
+}
+
+// SetCANFDInitConfig applies nominal (NBT) timing to arbitration and data (DBT)
+// timing to the data phase. BRP fields are ignored by the Vector API.
+func (v *Vector) SetCANFDInitConfig(cfg CANFDInitConfig) {
+	v.canFdSjwAbr = uint32(cfg.NBT_SJW)
+	v.canFdTseg1Abr = uint32(cfg.NBT_SEG1)
+	v.canFdTseg2Abr = uint32(cfg.NBT_SEG2)
+	v.canFdSjwDbr = uint32(cfg.DBT_SJW)
+	v.canFdTseg1Dbr = uint32(cfg.DBT_SEG1)
+	v.canFdTseg2Dbr = uint32(cfg.DBT_SEG2)
 }
 
 func (v *Vector) Init() error {
@@ -546,12 +571,12 @@ func (v *Vector) configureChannel() error {
 		var conf xlCanFdConf
 		conf.ArbitrationBitRate = v.cfg.NominalBitrate
 		conf.DataBitRate = v.cfg.DataBitrate
-		conf.SjwAbr = vectorDefaultCanFdSJW
-		conf.Tseg1Abr = vectorDefaultCanFdTseg1
-		conf.Tseg2Abr = vectorDefaultCanFdTseg2
-		conf.SjwDbr = vectorDefaultCanFdSJW
-		conf.Tseg1Dbr = vectorDefaultCanFdTseg1
-		conf.Tseg2Dbr = vectorDefaultCanFdTseg2
+		conf.SjwAbr = v.canFdSjwAbr
+		conf.Tseg1Abr = v.canFdTseg1Abr
+		conf.Tseg2Abr = v.canFdTseg2Abr
+		conf.SjwDbr = v.canFdSjwDbr
+		conf.Tseg1Dbr = v.canFdTseg1Dbr
+		conf.Tseg2Dbr = v.canFdTseg2Dbr
 
 		if err := v.callStatus(v.canFdSetConfigurationProc, uintptr(v.portHandle), uintptr(channelMask), uintptr(unsafe.Pointer(&conf))); err != nil {
 			return fmt.Errorf("xlCanFdSetConfiguration failed: %w", err)

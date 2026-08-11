@@ -554,6 +554,7 @@ func (t *TSMaster) Init() error {
 	t.lifecycle.markInitialized()
 	return nil
 }
+
 func (t *TSMaster) Start() {
 	if err := t.StartWithError(); err != nil {
 		log.Printf("TSMaster start failed: %v", err)
@@ -571,6 +572,7 @@ func (t *TSMaster) StartWithError() error {
 	}
 	return nil
 }
+
 func (t *TSMaster) readLoop() {
 	ticker := time.NewTicker(t.cfg.PollingInterval)
 	defer ticker.Stop()
@@ -670,6 +672,7 @@ func (t *TSMaster) Stop() {
 	t.closeTelemetry()
 	fmt.Println("TSMaster stopped")
 }
+
 func (t *TSMaster) Write(id int32, fd bool, data []byte) error {
 	t.lifecycle.opMu.Lock()
 	defer t.lifecycle.opMu.Unlock()
@@ -700,6 +703,7 @@ func (t *TSMaster) Write(id int32, fd bool, data []byte) error {
 	}
 	return nil
 }
+
 func (t *TSMaster) RxChan() <-chan CanFrame {
 	t.lifecycle.opMu.Lock()
 	defer t.lifecycle.opMu.Unlock()
@@ -718,6 +722,7 @@ func (t *TSMaster) SubscribeRx(buffer int) (<-chan CanFrame, func()) {
 	}
 	return t.fanout.Subscribe(buffer)
 }
+
 func (t *TSMaster) IsFDMode() bool {
 	t.lifecycle.opMu.Lock()
 	defer t.lifecycle.opMu.Unlock()
