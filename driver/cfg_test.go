@@ -1,7 +1,10 @@
 package driver
 
 import (
+	"bytes"
 	"context"
+	"log"
+	"strings"
 	"testing"
 	"time"
 )
@@ -93,6 +96,57 @@ func TestValidateWriteStandardCANAndCANFD(t *testing.T) {
 		if err := validateWrite(tc.cfg, tc.id, tc.fd, tc.data); err == nil {
 			t.Fatalf("validateWrite(%+v, 0x%X, %t, len=%d) unexpectedly succeeded", tc.cfg, tc.id, tc.fd, len(tc.data))
 		}
+	}
+}
+
+func TestLogFilterList(t *testing.T) {
+	originalOutput := log.Writer()
+	var output bytes.Buffer
+	log.SetOutput(&output)
+	SetPrintLog(true)
+	t.Cleanup(func() {
+		SetPrintLog(false)
+		_ = SetLogFilter(LogFilterOff, nil)
+		log.SetOutput(originalOutput)
+	})
+
+	if err := SetLogFilter(LogFilterList, []uint32{0x123, 0x456}); err != nil {
+		t.Fatal(err)
+	}
+	logCANMessage("RX", 0x123, 1, []byte{0xAA}, CAN)
+	logCANMessage("RX", 0x321, 1, []byte{0xBB}, CAN)
+
+	got := output.String()
+	if !strings.Contains(got, "ID=0x123") {
+		t.Fatalf("allowed CAN ID was not logged: %q", got)
+	}
+	if strings.Contains(got, "ID=0x321") {
+		t.Fatalf("filtered CAN ID was logged: %q", got)
+	}
+}
+
+func TestLogFilterConfiguration(t *testing.T) {
+	t.Cleanup(func() {
+		_ = SetLogFilter(LogFilterOff, nil)
+	})
+
+	if err := SetLogFilter(LogFilterList, nil); err != nil {
+		t.Fatal(err)
+	}
+	if filter := logFilter.Load(); filter == nil || filter.allows(0x123) {
+		t.Fatal("empty list should suppress every CAN ID")
+	}
+	if err := SetLogFilter(LogFilterList, []uint32{0x800}); err == nil {
+		t.Fatal("out-of-range CAN ID unexpectedly accepted")
+	}
+	if err := SetLogFilter(LogFilterMode(99), nil); err == nil {
+		t.Fatal("unsupported filter mode unexpectedly accepted")
+	}
+	if err := SetLogFilter(LogFilterOff, nil); err != nil {
+		t.Fatal(err)
+	}
+	if filter := logFilter.Load(); filter != nil {
+		t.Fatal("LogFilterOff should remove the active filter")
 	}
 }
 
