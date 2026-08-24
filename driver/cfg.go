@@ -8,6 +8,29 @@ import (
 
 var printLog atomic.Bool
 
+// LogFilterMode controls which CAN messages are written to the log.
+type LogFilterMode uint8
+
+const (
+	// LogFilterOff disables log filtering and allows every CAN ID.
+	LogFilterOff LogFilterMode = iota
+	// LogFilterList allows only CAN IDs configured by SetLogFilter.
+	LogFilterList
+)
+
+type compiledLogFilter struct {
+	ids [32]uint64 // 2048 bits for standard 11-bit CAN IDs.
+}
+
+func (f *compiledLogFilter) allows(id uint32) bool {
+	if id > 0x7FF {
+		return false
+	}
+	return f.ids[id>>6]&(uint64(1)<<(id&63)) != 0
+}
+
+var logFilter atomic.Pointer[compiledLogFilter]
+
 // Config contains settings shared by all CAN hardware backends.
 //
 // The driver package intentionally supports standard (11-bit) CAN and CAN-FD
@@ -94,4 +117,28 @@ func SetPrintLog(b bool) {
 
 func printLogEnabled() bool {
 	return printLog.Load()
+}
+
+// SetLogFilter configures filtering for CAN message logs. LogFilterOff allows
+// every ID. LogFilterList allows only IDs present in list; an empty list
+// suppresses all CAN message logs.
+func SetLogFilter(mode LogFilterMode, list []uint32) error {
+	switch mode {
+	case LogFilterOff:
+		logFilter.Store(nil)
+		return nil
+	case LogFilterList:
+	default:
+		return fmt.Errorf("unsupported log filter mode: %d", mode)
+	}
+
+	filter := &compiledLogFilter{}
+	for _, id := range list {
+		if id > 0x7FF {
+			return fmt.Errorf("log filter CAN ID 0x%X out of range (0x000-0x7FF)", id)
+		}
+		filter.ids[id>>6] |= uint64(1) << (id & 63)
+	}
+	logFilter.Store(filter)
+	return nil
 }

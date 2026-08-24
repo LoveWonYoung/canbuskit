@@ -69,6 +69,9 @@ func logCANMessage(direction string, id uint32, dlc byte, data []byte, canType C
 	if !printLogEnabled() {
 		return
 	}
+	if filter := logFilter.Load(); filter != nil && !filter.allows(id) {
+		return
+	}
 	typeStr := "CANFD"
 	if canType == CAN {
 		typeStr = "CAN  "

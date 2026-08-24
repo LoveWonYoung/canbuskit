@@ -1,4 +1,4 @@
-//go:build windows
+//go:build windows || (darwin && cgo)
 
 package driver
 
@@ -32,5 +32,25 @@ func TestToomossSetCANFDTiming(t *testing.T) {
 	}
 	if got.NBT_BRP != 3 || got.DBT_SEG1 != 8 || got.DBT_SJW != 1 {
 		t.Fatalf("SetCANFDTiming() timing not applied: %+v", got)
+	}
+}
+
+func TestToomossClassicFlags(t *testing.T) {
+	remoteFlag, externFlag := encodeToomossClassicFlags(CHANNEL2, false, false)
+	channel, remote, extended, errorFrame, txEcho := decodeToomossClassicFlags(remoteFlag, externFlag)
+	if channel != CHANNEL2 || remote || extended || errorFrame || txEcho {
+		t.Fatalf(
+			"decoded flags = channel %d, remote %t, extended %t, error %t, tx %t",
+			channel, remote, extended, errorFrame, txEcho,
+		)
+	}
+}
+
+func TestToomossDLCToDataLen(t *testing.T) {
+	if got := toomossDLCToDataLen(64, false); got != 8 {
+		t.Fatalf("classic length = %d, want 8", got)
+	}
+	if got := toomossDLCToDataLen(64, true); got != 64 {
+		t.Fatalf("CAN-FD length = %d, want 64", got)
 	}
 }
