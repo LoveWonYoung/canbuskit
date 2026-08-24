@@ -545,11 +545,16 @@ func (t *TSMaster) Init() error {
 	t.isConnected = true
 
 	// 启用接收FIFO
-	r, _, _ = t.loader.GetProcAddress("tsfifo_enable_receive_fifo").Call()
-	fmt.Printf("Enable receive FIFO result: %d\n", r)
-	if r != 0 {
-		return cleanup(fmt.Errorf("enable receive FIFO failed: %d", r))
+	enableFIFOProc := t.loader.GetProcAddress("tsfifo_enable_receive_fifo")
+	if enableFIFOProc == nil {
+		return cleanup(errors.New("tsfifo_enable_receive_fifo not found"))
 	}
+	if err := enableFIFOProc.Find(); err != nil {
+		return cleanup(fmt.Errorf("tsfifo_enable_receive_fifo not found: %w", err))
+	}
+	// TSMaster.h declares this API as void. syscall.Proc.Call's first return
+	// value is undefined for void functions (often 1), so it is not a status.
+	enableFIFOProc.Call()
 
 	t.lifecycle.markInitialized()
 	return nil
