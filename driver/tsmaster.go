@@ -8,8 +8,6 @@ import (
 	"fmt"
 	"log"
 	"math"
-	"os"
-	"path/filepath"
 	"runtime"
 	"syscall"
 	"time"
@@ -209,9 +207,12 @@ type TSMasterLoader struct {
 func NewTSMasterLoader() (*TSMasterLoader, error) {
 	loader := &TSMasterLoader{}
 
-	dllPath, err := loader.findDLLPath()
+	dllPath, err := getTSMasterDLLFromRegistry()
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("failed to get TSMaster DLL path from registry: %w", err)
+	}
+	if dllPath == "" {
+		return nil, fmt.Errorf("TSMaster DLL path from registry is empty")
 	}
 
 	loader.DLLPath = dllPath
@@ -224,61 +225,25 @@ func NewTSMasterLoader() (*TSMasterLoader, error) {
 	return loader, nil
 }
 
-// findDLLPath 查找DLL文件路径
-func (t *TSMasterLoader) findDLLPath() (string, error) {
-	// 1. 从默认安装目录查找
-	basePath := "C:\\Program Files (x86)\\TOSUN\\TSMaster"
-
-	var dllPath string
-	if runtime.GOARCH == "386" {
-		dllPath = filepath.Join(basePath, "bin", "TSMaster.dll")
-	} else {
-		dllPath = filepath.Join(basePath, "bin64", "TSMaster.dll")
-	}
-
-	if t.fileExists(dllPath) {
-		fmt.Println("find dll ", dllPath)
-		return dllPath, nil
-	}
-
-	fmt.Println("not find dll ", dllPath)
-
-	// 2. 如果当前路径未找到，再从注册表获取
-	if path, err := t.getDLLFromRegistry(); err == nil && path != "" {
-		dllPath = filepath.Join(filepath.Dir(path), "TSMaster.dll")
-		if t.fileExists(dllPath) {
-			return dllPath, nil
-		}
-	}
-
-	return "", fmt.Errorf("TSMaster.dll not found in default or registry paths")
-}
-
-// getDLLFromRegistry 从注册表获取DLL路径
-func (t *TSMasterLoader) getDLLFromRegistry() (string, error) {
+func getTSMasterDLLFromRegistry() (string, error) {
 	regPath := `Software\TOSUN\TSMaster`
-
-	key, err := registry.OpenKey(registry.CURRENT_USER, regPath, registry.QUERY_VALUE)
+	key, err := registry.OpenKey(
+		registry.LOCAL_MACHINE,
+		regPath,
+		registry.QUERY_VALUE|registry.WOW64_32KEY,
+	)
 	if err != nil {
 		return "", err
 	}
 	defer key.Close()
 
-	var keyName string
+	keyName := "libTSMaster_x64"
 	if runtime.GOARCH == "386" {
 		keyName = "libTSMaster_x86"
-	} else {
-		keyName = "libTSMaster_x64"
 	}
 
 	value, _, err := key.GetStringValue(keyName)
 	return value, err
-}
-
-// fileExists 检查文件是否存在
-func (t *TSMasterLoader) fileExists(path string) bool {
-	_, err := os.Stat(path)
-	return err == nil
 }
 
 // GetProcAddress 获取函数地址
