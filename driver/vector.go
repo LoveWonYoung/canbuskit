@@ -7,12 +7,15 @@ import (
 	"errors"
 	"fmt"
 	"log"
+	"os"
 	"path/filepath"
 	"runtime"
 	"strings"
 	"syscall"
 	"time"
 	"unsafe"
+
+	"golang.org/x/sys/windows/registry"
 )
 
 const (
@@ -445,18 +448,82 @@ func (v *Vector) Config() Config {
 	return v.cfg
 }
 
+func vectorDLLName() string {
+	if runtime.GOARCH == "386" {
+		return vectorDLLName32
+	}
+	return vectorDLLName64
+}
+
+func vectorDLLCandidates() []string {
+	dllName := vectorDLLName()
+	var candidates []string
+	seen := make(map[string]struct{})
+
+	add := func(path string) {
+		if path == "" {
+			return
+		}
+		normalized := strings.ToLower(filepath.Clean(path))
+		if _, exists := seen[normalized]; exists {
+			return
+		}
+		seen[normalized] = struct{}{}
+		candidates = append(candidates, path)
+	}
+
+	if path, err := getVectorDLLFromRegistry(dllName); err == nil && path != "" {
+		add(path)
+	}
+
+	systemRoot := os.Getenv("SystemRoot")
+	if systemRoot == "" {
+		systemRoot = `C:\Windows`
+	}
+	if runtime.GOARCH == "386" {
+		add(filepath.Join(systemRoot, "SysWOW64", dllName))
+	}
+	add(filepath.Join(systemRoot, "System32", dllName))
+	add(filepath.Join(".", "bin", dllName))
+	return candidates
+}
+
+func getVectorDLLFromRegistry(dllName string) (string, error) {
+	access := uint32(registry.QUERY_VALUE)
+	if runtime.GOARCH == "386" {
+		access |= registry.WOW64_32KEY
+	} else {
+		access |= registry.WOW64_64KEY
+	}
+
+	key, err := registry.OpenKey(
+		registry.LOCAL_MACHINE,
+		`SOFTWARE\Microsoft\Windows\CurrentVersion\SharedDlls`,
+		access,
+	)
+	if err != nil {
+		return "", err
+	}
+	defer key.Close()
+
+	names, err := key.ReadValueNames(-1)
+	if err != nil {
+		return "", err
+	}
+	for _, name := range names {
+		if strings.EqualFold(filepath.Base(name), dllName) {
+			return name, nil
+		}
+	}
+	return "", fmt.Errorf("%s not found in SharedDlls", dllName)
+}
+
 func (v *Vector) loadDLL() error {
 	if v.dll != nil {
 		return nil
 	}
-	dllName := vectorDLLName64
-	if runtime.GOARCH == "386" {
-		dllName = vectorDLLName32
-	}
-	candidates := []string{
-		filepath.Join(".", "bin", dllName),
-		dllName,
-	}
+	dllName := vectorDLLName()
+	candidates := vectorDLLCandidates()
 	var errs []string
 	for _, dllPath := range candidates {
 		dll := syscall.NewLazyDLL(dllPath)
