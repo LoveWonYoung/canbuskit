@@ -15,6 +15,8 @@ import (
 	"syscall"
 	"time"
 	"unsafe"
+
+	"golang.org/x/sys/windows/registry"
 )
 
 const (
@@ -353,55 +355,58 @@ func pcanDLLCandidates() []string {
 		if path == "" {
 			return
 		}
-		if _, exists := seen[path]; exists {
+		normalized := strings.ToLower(filepath.Clean(path))
+		if _, exists := seen[normalized]; exists {
 			return
 		}
-		seen[path] = struct{}{}
+		seen[normalized] = struct{}{}
 		candidates = append(candidates, path)
 	}
 
-	if envPath := os.Getenv("PCAN_DLL_PATH"); envPath != "" {
-		if info, err := os.Stat(envPath); err == nil && info.IsDir() {
-			add(filepath.Join(envPath, pcanDLLName))
-		} else {
-			add(envPath)
-		}
-	}
-	if envDir := os.Getenv("PCAN_DLL_DIR"); envDir != "" {
-		add(filepath.Join(envDir, pcanDLLName))
+	if path, err := getPCANBasicDLLFromRegistry(); err == nil && path != "" {
+		add(path)
 	}
 
-	add(filepath.Join(".", "bin", pcanDLLName))
-	add(pcanDLLName)
-
-	programRoots := []string{
-		os.Getenv("ProgramFiles"),
-		os.Getenv("ProgramFiles(x86)"),
+	systemRoot := os.Getenv("SystemRoot")
+	if systemRoot == "" {
+		systemRoot = `C:\Windows`
 	}
-	archSubdirs := []string{"Win64", "x64"}
 	if runtime.GOARCH == "386" {
-		archSubdirs = []string{"Win32", "x86"}
+		add(filepath.Join(systemRoot, "SysWOW64", pcanDLLName))
 	}
-	baseSubdirs := []string{"", "Redistributable", "Redistributables"}
-
-	for _, root := range programRoots {
-		if root == "" {
-			continue
-		}
-		base := filepath.Join(root, "PEAK-System", "PCAN-Basic")
-		for _, sub := range baseSubdirs {
-			dir := base
-			if sub != "" {
-				dir = filepath.Join(base, sub)
-			}
-			add(filepath.Join(dir, pcanDLLName))
-			for _, archSub := range archSubdirs {
-				add(filepath.Join(dir, archSub, pcanDLLName))
-			}
-		}
-	}
-
+	add(filepath.Join(systemRoot, "System32", pcanDLLName))
+	add(filepath.Join(".", "bin", pcanDLLName))
 	return candidates
+}
+
+func getPCANBasicDLLFromRegistry() (string, error) {
+	access := uint32(registry.QUERY_VALUE)
+	if runtime.GOARCH == "386" {
+		access |= registry.WOW64_32KEY
+	} else {
+		access |= registry.WOW64_64KEY
+	}
+
+	key, err := registry.OpenKey(
+		registry.LOCAL_MACHINE,
+		`SOFTWARE\Microsoft\Windows\CurrentVersion\SharedDlls`,
+		access,
+	)
+	if err != nil {
+		return "", err
+	}
+	defer key.Close()
+
+	names, err := key.ReadValueNames(-1)
+	if err != nil {
+		return "", err
+	}
+	for _, name := range names {
+		if strings.EqualFold(filepath.Base(name), pcanDLLName) {
+			return name, nil
+		}
+	}
+	return "", fmt.Errorf("%s not found in SharedDlls", pcanDLLName)
 }
 
 func (p *PCAN) loadDLL() error {
