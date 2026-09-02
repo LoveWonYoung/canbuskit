@@ -24,15 +24,25 @@ func TestClassicCANFrameBitsStuffsLongZeroRuns(t *testing.T) {
 	}
 }
 
-func TestCANFDFrameBitsWorstCase(t *testing.T) {
+func TestCANFDFrameBitsIncludesDLCAndUnstuffedTrailer(t *testing.T) {
 	frame := CanFrame{ID: 0x100, DLC: 8, IsFD: true, Data: [64]byte{1, 2, 3, 4, 5, 6, 7, 8}}
 	arb, data := canFDFrameBits(frame)
 	if data != 0 {
 		t.Fatalf("data-phase bits = %d, want 0 (no BRS)", data)
 	}
-	want := (1 + 11 + 17 + 5 + 12 + 64) * 5 / 4
-	if arb != want {
-		t.Fatalf("canFDFrameBits() = %d, want %d", arb, want)
+	// 1+11+5+4+64+17 = 102 stuffable * 5/4 = 127, +13 trailer = 140.
+	if arb != 140 {
+		t.Fatalf("canFDFrameBits() = %d, want 140", arb)
+	}
+}
+
+func TestCANFDCRCLength(t *testing.T) {
+	short := CanFrame{ID: 0x100, DLC: 10, IsFD: true} // 16 bytes, CRC-17
+	long := CanFrame{ID: 0x100, DLC: 11, IsFD: true}  // 20 bytes, CRC-21
+	shortBits, _ := canFDFrameBits(short)
+	longBits, _ := canFDFrameBits(long)
+	if longBits <= shortBits {
+		t.Fatalf("20-byte frame bits %d should exceed 16-byte %d", longBits, shortBits)
 	}
 }
 
@@ -42,6 +52,9 @@ func TestCANFDFrameBitsWithBRSUsesDataPhase(t *testing.T) {
 	if data == 0 {
 		t.Fatal("expected data-phase bits when BRS is set")
 	}
+	if arb == 0 {
+		t.Fatal("expected arbitration-phase bits when BRS is set")
+	}
 	noBRS := CanFrame{ID: 0x100, DLC: 15, IsFD: true}
 	withBRS := noBRS
 	withBRS.BRS = true
@@ -49,9 +62,6 @@ func TestCANFDFrameBitsWithBRSUsesDataPhase(t *testing.T) {
 	fast := frameOccupancy(withBRS, 500_000, 2_000_000)
 	if fast >= slow {
 		t.Fatalf("BRS occupancy %s, want less than %s", fast, slow)
-	}
-	if arb+data != (1+11+17+5+12+64)*5/4 {
-		t.Fatalf("arb(%d)+data(%d) mismatch", arb, data)
 	}
 }
 

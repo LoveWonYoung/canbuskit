@@ -8,12 +8,16 @@ import (
 	"fmt"
 	"log"
 	"math"
+	"os"
+	"path/filepath"
 	"runtime"
+	"strings"
 	"syscall"
 	"time"
 
 	"unsafe"
 
+	"golang.org/x/sys/windows"
 	"golang.org/x/sys/windows/registry"
 )
 
@@ -216,6 +220,9 @@ func NewTSMasterLoader() (*TSMasterLoader, error) {
 	}
 
 	loader.DLLPath = dllPath
+	if err := useTSMasterDLLDirectory(dllPath); err != nil {
+		return nil, err
+	}
 	loader.DLL = syscall.NewLazyDLL(dllPath)
 
 	if err := loader.DLL.Load(); err != nil {
@@ -223,6 +230,27 @@ func NewTSMasterLoader() (*TSMasterLoader, error) {
 	}
 
 	return loader, nil
+}
+
+func useTSMasterDLLDirectory(dllPath string) error {
+	dir := filepath.Dir(dllPath)
+	if dir == "" || dir == "." {
+		return nil
+	}
+	if err := windows.SetDllDirectory(dir); err != nil {
+		return fmt.Errorf("set TSMaster DLL directory %s: %w", dir, err)
+	}
+	path := os.Getenv("PATH")
+	sep := string(os.PathListSeparator)
+	for _, item := range strings.Split(path, sep) {
+		if strings.EqualFold(item, dir) {
+			return nil
+		}
+	}
+	if path == "" {
+		return os.Setenv("PATH", dir)
+	}
+	return os.Setenv("PATH", dir+sep+path)
 }
 
 func getTSMasterDLLFromRegistry() (string, error) {

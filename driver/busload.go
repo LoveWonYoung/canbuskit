@@ -288,28 +288,36 @@ func classicCANFrameBits(frame CanFrame) int {
 		3 // IFS
 }
 
-// canFDFrameBits uses the linux-can worst-case estimate. Exact CAN-FD stuffing
-// is not applied. When BRS is set, the data-phase bits are returned separately
-// so occupancy can use DataBitrate.
+const (
+	canFDSFFArbUnstuffed = 17 // SOF, ID, RRS, IDE, FDF, res, BRS
+	canFDCrcDelimiter    = 1
+	canFDAckTrailer      = 1 + 1 + 7 + 3 // ACK, ACK delimiter, EOF, IFS
+)
+
+// canFDFrameBits estimates on-wire bits for an 11-bit CAN-FD frame.
+//
+// CANoe bus statistics use worst-case stuffing on SOF through the CRC
+// sequence (including DLC) and do not stuff CRC delimiter / ACK / EOF / IFS.
+// That combination matches observed CANoe percentages much more closely than
+// linux-can's shorter 5/4 estimate, which omitted DLC and stuffed the trailer.
 func canFDFrameBits(frame CanFrame) (arbBits, dataBits int) {
 	payload := frame.DataLength()
 	if payload > 64 {
 		payload = 64
 	}
-	crcBits := 17
-	if payload >= 16 {
-		crcBits = 21
+	crcLen := 17
+	if payload > 16 {
+		crcLen = 21
 	}
-	// 1 SOF + 11 ID + CRC + r1/IDE/FDF/res/BRS + 12 trail + payload
-	total := (1 + 11 + crcBits + 5 + 12 + payload*8) * 5 / 4
+	// SOF + ID + RRS/IDE/FDF/res/BRS + DLC + data + CRC
+	stuffable := 1 + 11 + 5 + 4 + payload*8 + crcLen
+	stuffed := stuffable * 5 / 4
+	trailer := canFDCrcDelimiter + canFDAckTrailer
 	if !frame.BRS {
-		return total, 0
+		return stuffed + trailer, 0
 	}
-	data := (1 + 1 + 4 + crcBits + payload*8) * 5 / 4
-	if data > total {
-		data = total
-	}
-	return total - data, data
+	arbStuffed := canFDSFFArbUnstuffed * 5 / 4
+	return arbStuffed + canFDAckTrailer, stuffed - arbStuffed + canFDCrcDelimiter
 }
 
 func appendBits(dst []byte, value uint32, n int) []byte {
