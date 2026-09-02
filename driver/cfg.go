@@ -44,6 +44,9 @@ type Config struct {
 	RxBufferSize    int
 	PollingInterval time.Duration
 	IncludeTxEcho   bool
+	// BRS enables CAN-FD bit rate switching on transmitted FD frames.
+	// Classic CAN frames are unaffected. Default is off.
+	BRS bool
 }
 
 // DefaultConfig returns the backwards-compatible 500 kbit/s / 2 Mbit/s setup.

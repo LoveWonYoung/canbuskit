@@ -35,6 +35,17 @@ func TestToomossSetCANFDTiming(t *testing.T) {
 	}
 }
 
+func TestToomossSetBRS(t *testing.T) {
+	drv := NewToomoss(CANFD, CHANNEL1)
+	if drv.BRS() {
+		t.Fatal("BRS must be off by default")
+	}
+	drv.SetBRS(true)
+	if !drv.BRS() || !drv.Config().BRS {
+		t.Fatal("SetBRS(true) did not enable BRS")
+	}
+}
+
 func TestToomossClassicFlags(t *testing.T) {
 	remoteFlag, externFlag := encodeToomossClassicFlags(CHANNEL2, false, false)
 	channel, remote, extended, errorFrame, txEcho := decodeToomossClassicFlags(remoteFlag, externFlag)

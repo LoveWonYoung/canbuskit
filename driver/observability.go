@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"sync"
 	"sync/atomic"
+	"time"
 )
 
 var ErrRxOverflow = errors.New("CAN receive queue overflow")
@@ -41,6 +42,7 @@ func (e *ReceiveOverflowError) Unwrap() error {
 type ObservableCANDriver interface {
 	Errors() <-chan error
 	Stats() DriverStats
+	BusLoad() BusLoadInfo
 }
 
 // RxSubscriber is an optional extension that lets callers release a receive
@@ -114,6 +116,7 @@ func (t *driverTelemetry) close() {
 type driverObservability struct {
 	mu        sync.RWMutex
 	telemetry *driverTelemetry
+	busLoad   busLoadMeter
 }
 
 func (o *driverObservability) resetTelemetry() *driverTelemetry {
@@ -129,6 +132,12 @@ func (o *driverObservability) resetTelemetry() *driverTelemetry {
 	}
 	o.telemetry = newDriverTelemetry()
 	return o.telemetry
+}
+
+func (o *driverObservability) resetTelemetryWith(cfg Config) *driverTelemetry {
+	t := o.resetTelemetry()
+	o.busLoad.configure(cfg)
+	return t
 }
 
 func (o *driverObservability) currentTelemetry() *driverTelemetry {
@@ -155,6 +164,18 @@ func (o *driverObservability) Stats() DriverStats {
 	return o.currentTelemetry().stats()
 }
 
+func (o *driverObservability) BusLoad() BusLoadInfo {
+	return o.busLoad.snapshot(time.Now())
+}
+
+func (o *driverObservability) recordBusTx(id int32, fd, brs bool, data []byte) {
+	o.busLoad.recordTx(id, fd, brs, data, time.Now())
+}
+
+func (o *driverObservability) observeBusFrame(frame CanFrame) {
+	o.busLoad.observe(frame, time.Now())
+}
+
 func (o *driverObservability) closeTelemetry() {
 	o.mu.RLock()
 	current := o.telemetry
@@ -163,6 +184,7 @@ func (o *driverObservability) closeTelemetry() {
 }
 
 func (o *driverObservability) publishRx(ctx context.Context, destination chan<- CanFrame, frame CanFrame) bool {
+	o.observeBusFrame(frame)
 	select {
 	case <-ctx.Done():
 		return false

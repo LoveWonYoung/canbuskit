@@ -51,6 +51,7 @@ const (
 	vectorCanFdTagTxOK = 1028
 
 	vectorCanFdRxFlagEDL = 1
+	vectorCanFdRxFlagBRS = 2
 
 	vectorCanFdTxTag     = 1088
 	vectorCanFdTxFlagEDL = 1
@@ -225,6 +226,18 @@ func (v *Vector) SetCANFDInitConfig(cfg CANFDInitConfig) {
 	v.canFdTseg2Dbr = uint32(cfg.DBT_SEG2)
 }
 
+func (v *Vector) SetBRS(enabled bool) {
+	v.lifecycle.opMu.Lock()
+	defer v.lifecycle.opMu.Unlock()
+	v.cfg.BRS = enabled
+}
+
+func (v *Vector) BRS() bool {
+	v.lifecycle.opMu.Lock()
+	defer v.lifecycle.opMu.Unlock()
+	return v.cfg.BRS
+}
+
 func (v *Vector) Init() error {
 	v.lifecycle.opMu.Lock()
 	defer v.lifecycle.opMu.Unlock()
@@ -240,7 +253,7 @@ func (v *Vector) Init() error {
 	v.CANChannel = int(cfg.Channel)
 	v.ctx, v.cancel = context.WithCancel(context.Background())
 	v.rxChan = make(chan CanFrame, cfg.RxBufferSize)
-	v.fanout = newRxFanout(v.ctx, v.rxChan, v.resetTelemetry())
+	v.fanout = newRxFanout(v.ctx, v.rxChan, v.resetTelemetryWith(cfg))
 	v.portHandle = vectorInvalidPortHandle
 	cleanup := func(err error) error {
 		v.cancel()
@@ -347,8 +360,10 @@ func (v *Vector) Write(id int32, fd bool, data []byte) error {
 		txEvent.Tag = vectorCanFdTxTag
 		txEvent.TransID = 0xFFFF
 		txEvent.TagData.CanMsg.CanID = uint32(id)
-		// txEvent.TagData.CanMsg.MsgFlags = vectorCanFdTxFlagEDL | vectorCanFdTxFlagBRS
 		txEvent.TagData.CanMsg.MsgFlags = vectorCanFdTxFlagEDL
+		if v.cfg.BRS {
+			txEvent.TagData.CanMsg.MsgFlags |= vectorCanFdTxFlagBRS
+		}
 		txEvent.TagData.CanMsg.DLC = dataLenToDlc(len(data))
 		copy(txEvent.TagData.CanMsg.Data[:], data)
 
@@ -368,6 +383,7 @@ func (v *Vector) Write(id int32, fd bool, data []byte) error {
 			return fmt.Errorf("xlCanTransmitEx sent %d of 1 messages", msgSent)
 		}
 		logCANMessage("TX", uint32(id), txEvent.TagData.CanMsg.DLC, txEvent.TagData.CanMsg.Data[:dlcToLen(txEvent.TagData.CanMsg.DLC)], CANFD)
+		v.recordBusTx(id, true, v.cfg.BRS, data)
 		return nil
 	}
 
@@ -397,6 +413,7 @@ func (v *Vector) Write(id int32, fd bool, data []byte) error {
 			return fmt.Errorf("xlCanTransmitEx sent %d of 1 messages", msgSent)
 		}
 		logCANMessage("TX", uint32(id), txEvent.TagData.CanMsg.DLC, txEvent.TagData.CanMsg.Data[:len(data)], CAN)
+		v.recordBusTx(id, false, false, data)
 		return nil
 	case CAN:
 		var event xlEvent
@@ -417,6 +434,7 @@ func (v *Vector) Write(id int32, fd bool, data []byte) error {
 		}
 		payloadLen := int(event.TagData.Msg.DLC)
 		logCANMessage("TX", uint32(id), byte(event.TagData.Msg.DLC), event.TagData.Msg.Data[:payloadLen], CAN)
+		v.recordBusTx(id, false, false, data)
 		return nil
 	default:
 		return errors.New("unknown CAN type")
@@ -727,14 +745,16 @@ func (v *Vector) readOneCanFD() bool {
 	unified.Direction = RX
 	if event.Tag == vectorCanFdTagTxOK {
 		unified.Direction = TX
-		if !v.cfg.IncludeTxEcho {
-			return true
-		}
 	}
 	unified.ID = msg.CanID & 0x1FFFFFFF
 	unified.DLC = dlc
 	unified.IsFD = msg.MsgFlags&vectorCanFdRxFlagEDL != 0
+	unified.BRS = unified.IsFD && msg.MsgFlags&vectorCanFdRxFlagBRS != 0
 	copy(unified.Data[:], msg.Data[:payloadLen])
+	if unified.Direction == TX && !v.cfg.IncludeTxEcho {
+		v.observeBusFrame(unified)
+		return true
+	}
 
 	msgType := CAN
 	if unified.IsFD {

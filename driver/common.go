@@ -87,6 +87,7 @@ type CanFrame struct {
 	DLC       byte
 	Data      [64]byte // 使用64字节以兼容CAN-FD
 	IsFD      bool     // 标志位，用于区分是CAN还是CAN-FD消息
+	BRS       bool     // CAN-FD bit rate switch; ignored for classic CAN
 }
 
 // DataLength returns the payload length represented by DLC.
@@ -141,6 +142,13 @@ var ErrDriverNotInitialized = errors.New("CAN driver is not initialized")
 // startup failures without changing the legacy CANDriver interface.
 type ErrorStartingCANDriver interface {
 	StartWithError() error
+}
+
+// BRSController is an optional extension that enables CAN-FD bit rate
+// switching on transmitted FD frames. Default is off.
+type BRSController interface {
+	SetBRS(enabled bool)
+	BRS() bool
 }
 
 // driverLifecycle serializes initialization/cleanup and makes the read loop

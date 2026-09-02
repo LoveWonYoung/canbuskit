@@ -72,6 +72,25 @@ func (p *Preset) Write(id int32, fd bool, data []byte) error {
 	return p.CanDevice.Write(id, fd, data)
 }
 
+func (p *Preset) SetBRS(enabled bool) {
+	if p == nil || p.CanDevice == nil {
+		return
+	}
+	if ctl, ok := p.CanDevice.(driver.BRSController); ok {
+		ctl.SetBRS(enabled)
+	}
+}
+
+func (p *Preset) BRS() bool {
+	if p == nil || p.CanDevice == nil {
+		return false
+	}
+	if ctl, ok := p.CanDevice.(driver.BRSController); ok {
+		return ctl.BRS()
+	}
+	return false
+}
+
 func (p *Preset) Read() <-chan driver.CanFrame {
 	if p == nil || p.CanDevice == nil {
 		return nil

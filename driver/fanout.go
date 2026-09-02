@@ -18,9 +18,7 @@ func newRxFanout(ctx context.Context, source <-chan CanFrame, telemetry *driverT
 		subs:      make(map[chan CanFrame]struct{}),
 		telemetry: telemetry,
 	}
-	f.wg.Add(1)
-	go func() {
-		defer f.wg.Done()
+	f.wg.Go(func() {
 		for {
 			select {
 			case <-ctx.Done():
@@ -34,7 +32,7 @@ func newRxFanout(ctx context.Context, source <-chan CanFrame, telemetry *driverT
 				f.dispatch(msg)
 			}
 		}
-	}()
+	})
 	return f
 }
 

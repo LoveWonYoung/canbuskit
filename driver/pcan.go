@@ -123,6 +123,18 @@ func (p *PCAN) SetCANFDInitConfig(cfg CANFDInitConfig) {
 	p.hasCANFDTiming = true
 }
 
+func (p *PCAN) SetBRS(enabled bool) {
+	p.lifecycle.opMu.Lock()
+	defer p.lifecycle.opMu.Unlock()
+	p.cfg.BRS = enabled
+}
+
+func (p *PCAN) BRS() bool {
+	p.lifecycle.opMu.Lock()
+	defer p.lifecycle.opMu.Unlock()
+	return p.cfg.BRS
+}
+
 func (p *PCAN) Init() error {
 	p.lifecycle.opMu.Lock()
 	defer p.lifecycle.opMu.Unlock()
@@ -139,7 +151,7 @@ func (p *PCAN) Init() error {
 	p.CANChannel = cfg.Channel
 	p.ctx, p.cancel = context.WithCancel(context.Background())
 	p.rxChan = make(chan CanFrame, cfg.RxBufferSize)
-	p.fanout = newRxFanout(p.ctx, p.rxChan, p.resetTelemetry())
+	p.fanout = newRxFanout(p.ctx, p.rxChan, p.resetTelemetryWith(cfg))
 	cleanup := func(err error) error {
 		p.cancel()
 		p.fanout.Close()
@@ -231,6 +243,9 @@ func (p *PCAN) Write(id int32, fd bool, data []byte) error {
 		var msg pcanMsgFD
 		msg.ID = uint32(id)
 		msg.MsgType = pcanMessageFD
+		if p.cfg.BRS {
+			msg.MsgType |= pcanMessageBRS
+		}
 		msg.DLC = dataLenToDlc(len(data))
 		copy(msg.Data[:], data)
 		status := p.callWriteFD(&msg)
@@ -238,6 +253,7 @@ func (p *PCAN) Write(id int32, fd bool, data []byte) error {
 			return fmt.Errorf("pcan write fd failed: %s", p.formatStatus(status))
 		}
 		logCANMessage("TX", msg.ID, msg.DLC, msg.Data[:dlcToLen(msg.DLC)], CANFD)
+		p.recordBusTx(id, true, p.cfg.BRS, data)
 		return nil
 	}
 
@@ -253,6 +269,7 @@ func (p *PCAN) Write(id int32, fd bool, data []byte) error {
 			return fmt.Errorf("pcan write failed: %s", p.formatStatus(status))
 		}
 		logCANMessage("TX", msg.ID, msg.DLC, msg.Data[:len(data)], CAN)
+		p.recordBusTx(id, false, false, data)
 		return nil
 	case CAN:
 		var msg pcanMsg
@@ -265,6 +282,7 @@ func (p *PCAN) Write(id int32, fd bool, data []byte) error {
 			return fmt.Errorf("pcan write failed: %s", p.formatStatus(status))
 		}
 		logCANMessage("TX", msg.ID, msg.Len, msg.Data[:msg.Len], CAN)
+		p.recordBusTx(id, false, false, data)
 		return nil
 	default:
 		return errors.New("unknown CAN type")
@@ -526,14 +544,16 @@ func (p *PCAN) enqueueMessage(id uint32, dlc byte, data []byte, msgType uint8) {
 	unified.Direction = RX
 	if msgType&pcanMessageEcho != 0 {
 		unified.Direction = TX
-		if !p.cfg.IncludeTxEcho {
-			return
-		}
 	}
 	unified.ID = id
 	unified.DLC = dlc
 	unified.IsFD = isFD
+	unified.BRS = isFD && msgType&pcanMessageBRS != 0
 	copy(unified.Data[:], data)
+	if unified.Direction == TX && !p.cfg.IncludeTxEcho {
+		p.observeBusFrame(unified)
+		return
+	}
 
 	payloadLen := dlcToLen(dlc)
 	logCANMessage("RX", unified.ID, unified.DLC, unified.Data[:payloadLen], msgTypeLabel)
