@@ -285,6 +285,10 @@ const (
 	tsCANPropertyTX       = 1 << 0
 	tsCANPropertyRemote   = 1 << 1
 	tsCANPropertyExtended = 1 << 2
+
+	tsCANFDPropertyEDL = 1 << 0
+	tsCANFDPropertyBRS = 1 << 1
+	tsCANFDPropertyESI = 1 << 2
 )
 
 // TSMasterMapping maps one application-side logical channel to one physical
@@ -371,7 +375,7 @@ func (t *TSMaster) Init() error {
 
 	// 初始化接收通道
 	t.rxChan = make(chan CanFrame, cfg.RxBufferSize)
-	t.fanout = newRxFanout(t.ctx, t.rxChan, t.resetTelemetry())
+	t.fanout = newRxFanout(t.ctx, t.rxChan, t.resetTelemetryWith(cfg))
 
 	cleanup := func(err error) error {
 		if t.cancel != nil {
@@ -594,16 +598,17 @@ func (t *TSMaster) readLoop() {
 				switch canfdMsg[i].FProperties & tsCANPropertyTX {
 				case 0:
 					unifiedMsg = CanFrame{
-						Direction: RX, ID: uint32(msg.FIdentifier), DLC: msg.FDLC, Data: msg.FData, IsFD: msg.FFDProperties&1 == 1,
+						Direction: RX, ID: uint32(msg.FIdentifier), DLC: msg.FDLC, Data: msg.FData, IsFD: msg.FFDProperties&tsCANFDPropertyEDL != 0, BRS: msg.FFDProperties&tsCANFDPropertyBRS != 0,
 					}
 
 					logCANMessage("RX", unifiedMsg.ID, unifiedMsg.DLC, unifiedMsg.Data[:dlcToLen(unifiedMsg.DLC)], msgType)
 				case 1:
-					if !t.cfg.IncludeTxEcho {
-						continue
-					}
 					unifiedMsg = CanFrame{
-						Direction: TX, ID: uint32(msg.FIdentifier), DLC: msg.FDLC, Data: msg.FData, IsFD: msg.FFDProperties&1 == 1,
+						Direction: TX, ID: uint32(msg.FIdentifier), DLC: msg.FDLC, Data: msg.FData, IsFD: msg.FFDProperties&tsCANFDPropertyEDL != 0, BRS: msg.FFDProperties&tsCANFDPropertyBRS != 0,
+					}
+					if !t.cfg.IncludeTxEcho {
+						t.observeBusFrame(unifiedMsg)
+						continue
 					}
 					logCANMessage("TX", unifiedMsg.ID, unifiedMsg.DLC, unifiedMsg.Data[:dlcToLen(unifiedMsg.DLC)], msgType)
 				}
@@ -659,9 +664,12 @@ func (t *TSMaster) Write(id int32, fd bool, data []byte) error {
 	canfdMsg.FProperties = 1
 	canfdMsg.FDLC = dataLenToDlc(len(data))
 	if fd {
-		canfdMsg.FFDProperties = uint8(CANFD)
+		canfdMsg.FFDProperties = tsCANFDPropertyEDL
+		if t.cfg.BRS {
+			canfdMsg.FFDProperties |= tsCANFDPropertyBRS
+		}
 	} else {
-		canfdMsg.FFDProperties = uint8(CAN)
+		canfdMsg.FFDProperties = 0
 	}
 	// 复制数据到CAN消息
 	maxLen := dlcToLen(canfdMsg.FDLC)
@@ -671,6 +679,7 @@ func (t *TSMaster) Write(id int32, fd bool, data []byte) error {
 	if r, _, _ := t.loader.GetProcAddress("tsapp_transmit_canfd_async").Call(uintptr(unsafe.Pointer(&canfdMsg))); r != 0 {
 		return fmt.Errorf("failed to send CAN-FD message, result code: %d", r)
 	}
+	t.recordBusTx(id, fd, fd && t.cfg.BRS, data)
 	return nil
 }
 
@@ -703,6 +712,18 @@ func (t *TSMaster) Config() Config {
 	t.lifecycle.opMu.Lock()
 	defer t.lifecycle.opMu.Unlock()
 	return t.cfg
+}
+
+func (t *TSMaster) SetBRS(enabled bool) {
+	t.lifecycle.opMu.Lock()
+	defer t.lifecycle.opMu.Unlock()
+	t.cfg.BRS = enabled
+}
+
+func (t *TSMaster) BRS() bool {
+	t.lifecycle.opMu.Lock()
+	defer t.lifecycle.opMu.Unlock()
+	return t.cfg.BRS
 }
 
 func (t *TSMaster) Mapping() TSMasterMapping {

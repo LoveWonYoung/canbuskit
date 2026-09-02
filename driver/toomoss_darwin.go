@@ -670,7 +670,7 @@ func (c *Toomoss) Init() error {
 func (c *Toomoss) prepareRuntime() {
 	c.ctx, c.cancel = context.WithCancel(context.Background())
 	c.rxChan = make(chan CanFrame, c.cfg.RxBufferSize)
-	c.fanout = newRxFanout(c.ctx, c.rxChan, c.resetTelemetry())
+	c.fanout = newRxFanout(c.ctx, c.rxChan, c.resetTelemetryWith(c.cfg))
 }
 
 func (c *Toomoss) fallbackToLegacyCAN(fdErr error) error {
@@ -817,6 +817,7 @@ func (c *Toomoss) readLoop() {
 					DLC:       dlc,
 					Data:      payload,
 					IsFD:      isFD,
+					BRS:       isFD && flags&CANFD_MSG_FLAG_BRS != 0,
 				}
 
 				msgType := c.canType
@@ -852,11 +853,12 @@ func (c *Toomoss) readClassicBurst(canMsg *[MsgBufferSize]C.CAN_MSG) {
 			continue
 		}
 		direction := RX
+		skipPublish := false
 		if txEcho {
-			if !c.cfg.IncludeTxEcho {
-				continue
-			}
 			direction = TX
+			if !c.cfg.IncludeTxEcho {
+				skipPublish = true
+			}
 		}
 		actualLen := int(msg.DataLen)
 		if actualLen > len(msg.Data) {
@@ -877,6 +879,10 @@ func (c *Toomoss) readClassicBurst(canMsg *[MsgBufferSize]C.CAN_MSG) {
 		}
 
 		logCANMessage("RX", unifiedMsg.ID, unifiedMsg.DLC, unifiedMsg.Data[:actualLen], CAN)
+		if skipPublish {
+			c.observeBusFrame(unifiedMsg)
+			continue
+		}
 		c.publishRx(c.ctx, c.rxChan, unifiedMsg)
 	}
 }
@@ -929,13 +935,14 @@ func (c *Toomoss) Write(id int32, fd bool, data []byte) error {
 	var msg C.CANFD_MSG
 	msg.ID = C.uint32_t(id)
 	msg.DLC = C.uint8_t(len(data))
-	switch {
-	case !fd:
+	if fd {
+		flags := CANFD_MSG_FLAG_FDF
+		if c.cfg.BRS {
+			flags |= CANFD_MSG_FLAG_BRS
+		}
+		msg.Flags = C.uint8_t(flags)
+	} else {
 		msg.Flags = C.uint8_t(CAN_MSG_FLAG_STD)
-	case fd:
-		msg.Flags = C.uint8_t(CANFD_MSG_FLAG_FDF)
-	default:
-		msg.Flags = C.uint8_t(CANFD_MSG_FLAG_FDF)
 	}
 	for i := 0; i < len(data) && i < 64; i++ {
 		msg.Data[i] = C.uint8_t(data[i])
@@ -963,9 +970,11 @@ func (c *Toomoss) Write(id int32, fd bool, data []byte) error {
 			DLC:       dataLenToDlc(len(data)),
 			Data:      payload,
 			IsFD:      byte(msg.Flags)&CANFD_MSG_FLAG_FDF != 0,
+			BRS:       byte(msg.Flags)&CANFD_MSG_FLAG_BRS != 0,
 		}
 
 		logCANMessage("TX", uint32(id), unifiedMsg.DLC, payload[:len(data)], logType)
+		c.recordBusTx(id, fd, fd && c.cfg.BRS, data)
 		if c.cfg.IncludeTxEcho {
 			c.publishRx(c.ctx, c.rxChan, unifiedMsg)
 		}
@@ -1019,6 +1028,7 @@ func (c *Toomoss) writeClassicCAN(id int32, fd bool, data []byte) error {
 		IsFD:      false,
 	}
 	logCANMessage("TX", canID, unifiedMsg.DLC, data, CAN)
+	c.recordBusTx(id, false, false, data)
 	if c.cfg.IncludeTxEcho {
 		c.publishRx(c.ctx, c.rxChan, unifiedMsg)
 	}
@@ -1054,4 +1064,16 @@ func (c *Toomoss) Config() Config {
 	c.lifecycle.opMu.Lock()
 	defer c.lifecycle.opMu.Unlock()
 	return c.cfg
+}
+
+func (c *Toomoss) SetBRS(enabled bool) {
+	c.lifecycle.opMu.Lock()
+	defer c.lifecycle.opMu.Unlock()
+	c.cfg.BRS = enabled
+}
+
+func (c *Toomoss) BRS() bool {
+	c.lifecycle.opMu.Lock()
+	defer c.lifecycle.opMu.Unlock()
+	return c.cfg.BRS
 }

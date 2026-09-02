@@ -160,7 +160,7 @@ func (c *CanalystII) Init() error {
 	c.CANChannel = cfg.Channel
 	c.ctx, c.cancel = context.WithCancel(context.Background())
 	c.rxChan = make(chan CanFrame, cfg.RxBufferSize)
-	c.fanout = newRxFanout(c.ctx, c.rxChan, c.resetTelemetry())
+	c.fanout = newRxFanout(c.ctx, c.rxChan, c.resetTelemetryWith(cfg))
 
 	cleanup := func(err error) error {
 		if c.opened && c.closeDeviceProc != nil {
@@ -369,6 +369,7 @@ func (c *CanalystII) Write(id int32, fd bool, data []byte) error {
 		return fmt.Errorf("VCI_Transmit failed: sent %d of 1", ret)
 	}
 	logCANMessage("TX", msg.ID, msg.DataLen, msg.Data[:msg.DataLen], CAN)
+	c.recordBusTx(id, false, false, data)
 	return nil
 }
 
@@ -399,6 +400,18 @@ func (c *CanalystII) Config() Config {
 	c.lifecycle.opMu.Lock()
 	defer c.lifecycle.opMu.Unlock()
 	return c.cfg
+}
+
+func (c *CanalystII) SetBRS(enabled bool) {
+	c.lifecycle.opMu.Lock()
+	defer c.lifecycle.opMu.Unlock()
+	c.cfg.BRS = enabled
+}
+
+func (c *CanalystII) BRS() bool {
+	c.lifecycle.opMu.Lock()
+	defer c.lifecycle.opMu.Unlock()
+	return c.cfg.BRS
 }
 
 func (c *CanalystII) loadDLL() error {
@@ -435,4 +448,3 @@ func canalystTiming(bitrate uint32) (Btr, error) {
 	}
 	return Btr{}, fmt.Errorf("unsupported CanalystII bitrate: %d", bitrate)
 }
-

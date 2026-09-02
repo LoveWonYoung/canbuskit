@@ -176,6 +176,15 @@ func (a *AutoDriver) Stats() DriverStats {
 	return DriverStats{}
 }
 
+func (a *AutoDriver) BusLoad() BusLoadInfo {
+	if drv := a.getDriver(); drv != nil {
+		if observable, ok := drv.(ObservableCANDriver); ok {
+			return observable.BusLoad()
+		}
+	}
+	return BusLoadInfo{}
+}
+
 func (a *AutoDriver) IsFDMode() bool {
 	a.mu.Lock()
 	defer a.mu.Unlock()
@@ -189,6 +198,27 @@ func (a *AutoDriver) Config() Config {
 	a.mu.Lock()
 	defer a.mu.Unlock()
 	return a.cfg
+}
+
+func (a *AutoDriver) SetBRS(enabled bool) {
+	a.mu.Lock()
+	a.cfg.BRS = enabled
+	drv := a.driver
+	a.mu.Unlock()
+	if ctl, ok := drv.(BRSController); ok {
+		ctl.SetBRS(enabled)
+	}
+}
+
+func (a *AutoDriver) BRS() bool {
+	if drv := a.getDriver(); drv != nil {
+		if ctl, ok := drv.(BRSController); ok {
+			return ctl.BRS()
+		}
+	}
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	return a.cfg.BRS
 }
 
 func (a *AutoDriver) SelectedName() string {
