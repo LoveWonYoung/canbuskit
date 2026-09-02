@@ -33,3 +33,21 @@ func TestPCANSetCANFDInitConfig(t *testing.T) {
 		t.Fatalf("canFDTiming = %+v, want %+v", drv.canFDTiming, cfg)
 	}
 }
+
+func TestPCANSetBRS(t *testing.T) {
+	drv := NewPCAN(CANFD, CHANNEL1)
+	if drv.BRS() {
+		t.Fatal("BRS must be off by default")
+	}
+	drv.SetBRS(true)
+	if !drv.BRS() {
+		t.Fatal("SetBRS(true) did not enable BRS")
+	}
+	if !drv.Config().BRS {
+		t.Fatal("Config().BRS not updated")
+	}
+	drv.SetBRS(false)
+	if drv.BRS() {
+		t.Fatal("SetBRS(false) did not disable BRS")
+	}
+}

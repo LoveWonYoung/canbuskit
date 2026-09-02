@@ -29,6 +29,9 @@ func TestDefaultConfig(t *testing.T) {
 	if cfg.IncludeTxEcho {
 		t.Fatal("TX echo must be disabled by default")
 	}
+	if cfg.BRS {
+		t.Fatal("BRS must be disabled by default")
+	}
 }
 
 func TestNormalizeConfigFillsDefaults(t *testing.T) {
