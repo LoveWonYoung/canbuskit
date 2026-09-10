@@ -19,6 +19,9 @@ type Transport interface {
 	RecvChan() <-chan []byte
 	SetTxAddress(addr *isotp.Address)
 	SetFDMode(isFD bool)
+	SetDefaultStMin(stMin int) error
+	SetDefaultBlockSize(blockSize int) error
+	SetManualFlowControl(enabled bool)
 	Run(ctx context.Context, rxChan <-chan isotp.CanMessage, txChan chan<- isotp.CanMessage)
 }
 
@@ -368,6 +371,33 @@ func (c *UDSClient) SetFunctionalAddress(addr *isotp.Address) error {
 		c.stack.SetTxAddress(addr)
 	}
 	return nil
+}
+
+// SetDefaultStMin forwards the default flow-control STmin setting to the
+// underlying ISO-TP transport.
+func (c *UDSClient) SetDefaultStMin(stMin int) error {
+	if c == nil || c.stack == nil {
+		return errors.New("UDS client transport is not initialized")
+	}
+	return c.stack.SetDefaultStMin(stMin)
+}
+
+// SetDefaultBlockSize forwards the default flow-control block-size setting to
+// the underlying ISO-TP transport.
+func (c *UDSClient) SetDefaultBlockSize(blockSize int) error {
+	if c == nil || c.stack == nil {
+		return errors.New("UDS client transport is not initialized")
+	}
+	return c.stack.SetDefaultBlockSize(blockSize)
+}
+
+// SetManualFlowControl forwards manual flow-control mode to the underlying
+// ISO-TP transport.
+func (c *UDSClient) SetManualFlowControl(enabled bool) {
+	if c == nil || c.stack == nil {
+		return
+	}
+	c.stack.SetManualFlowControl(enabled)
 }
 
 // SetAddressingMode switches between physical and functional addressing for requests.

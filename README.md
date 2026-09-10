@@ -185,6 +185,9 @@ err := dev.Write(int32(addr.TxID), dev.IsFDMode(), []byte{0x30, 0x1E, 0x05})
 
 `SetManualFlowControl(false)` 可恢复自动流控；默认即为自动模式。手动模式下，
 TP 层仍会维护连续帧接收状态、Block 计数和 N_Cr 超时，但不会自动发送流控帧。
+这三个设置方法也由 `UDSClient` 和 `Preset` 原样转发，因此使用预设设备时可以
+直接调用 `preset.SetDefaultBlockSize`、`preset.SetDefaultStMin` 和
+`preset.SetManualFlowControl`。
 
 ## UDS 客户端能力
 
