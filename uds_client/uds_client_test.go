@@ -90,14 +90,17 @@ func (m *MockCANDriver) GetWriteLog() [][]byte {
 
 // MockTransport 是 isotp.Transport 的简化 Mock
 type MockTransport struct {
-	mu        sync.Mutex
-	sendQueue [][]byte
-	recvCh    chan []byte
-	fdMode    bool
-	txAddr    *isotp.Address
-	sendTxIDs []uint32
-	autoResp  []byte
-	autoDelay time.Duration
+	mu                sync.Mutex
+	sendQueue         [][]byte
+	recvCh            chan []byte
+	fdMode            bool
+	txAddr            *isotp.Address
+	sendTxIDs         []uint32
+	autoResp          []byte
+	autoDelay         time.Duration
+	defaultStMin      int
+	defaultBlockSize  int
+	manualFlowControl bool
 }
 
 func NewMockTransport() *MockTransport {
@@ -152,6 +155,26 @@ func (t *MockTransport) SetTxAddress(addr *isotp.Address) {
 	t.txAddr = addr
 }
 
+func (t *MockTransport) SetDefaultStMin(stMin int) error {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	t.defaultStMin = stMin
+	return nil
+}
+
+func (t *MockTransport) SetDefaultBlockSize(blockSize int) error {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	t.defaultBlockSize = blockSize
+	return nil
+}
+
+func (t *MockTransport) SetManualFlowControl(enabled bool) {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	t.manualFlowControl = enabled
+}
+
 func (t *MockTransport) Run(ctx context.Context, rxChan <-chan isotp.CanMessage, txChan chan<- isotp.CanMessage) {
 	// Mock implementation: do nothing or simulate loop
 }
@@ -170,6 +193,31 @@ func (t *MockTransport) SetAutoResponse(delay time.Duration, data []byte) {
 // ============================================================================
 // 测试用例
 // ============================================================================
+
+func TestUDSClientForwardsFlowControlSettings(t *testing.T) {
+	transport := NewMockTransport()
+	client := &UDSClient{stack: transport}
+
+	if err := client.SetDefaultStMin(5); err != nil {
+		t.Fatalf("SetDefaultStMin() failed: %v", err)
+	}
+	if err := client.SetDefaultBlockSize(30); err != nil {
+		t.Fatalf("SetDefaultBlockSize() failed: %v", err)
+	}
+	client.SetManualFlowControl(true)
+
+	transport.mu.Lock()
+	defer transport.mu.Unlock()
+	if transport.defaultStMin != 5 {
+		t.Fatalf("STmin was not forwarded: %d", transport.defaultStMin)
+	}
+	if transport.defaultBlockSize != 30 {
+		t.Fatalf("block size was not forwarded: %d", transport.defaultBlockSize)
+	}
+	if !transport.manualFlowControl {
+		t.Fatal("manual flow-control mode was not forwarded")
+	}
+}
 
 // TestUDSError_Error 测试 UDSError 的错误消息格式
 func TestUDSError_Error(t *testing.T) {

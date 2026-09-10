@@ -72,6 +72,33 @@ func (p *Preset) Write(id int32, fd bool, data []byte) error {
 	return p.CanDevice.Write(id, fd, data)
 }
 
+// SetDefaultStMin sets the STmin value advertised by automatic ISO-TP
+// flow-control frames.
+func (p *Preset) SetDefaultStMin(stMin int) error {
+	if p == nil || p.Client == nil {
+		return fmt.Errorf("preset UDS client is not initialized")
+	}
+	return p.Client.SetDefaultStMin(stMin)
+}
+
+// SetDefaultBlockSize sets the block size advertised by automatic ISO-TP
+// flow-control frames.
+func (p *Preset) SetDefaultBlockSize(blockSize int) error {
+	if p == nil || p.Client == nil {
+		return fmt.Errorf("preset UDS client is not initialized")
+	}
+	return p.Client.SetDefaultBlockSize(blockSize)
+}
+
+// SetManualFlowControl disables automatic ISO-TP flow-control transmission
+// when enabled. The caller must send flow-control frames through Write.
+func (p *Preset) SetManualFlowControl(enabled bool) {
+	if p == nil || p.Client == nil {
+		return
+	}
+	p.Client.SetManualFlowControl(enabled)
+}
+
 func (p *Preset) SetBRS(enabled bool) {
 	if p == nil || p.CanDevice == nil {
 		return
