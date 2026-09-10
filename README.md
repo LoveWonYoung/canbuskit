@@ -160,6 +160,32 @@ cfg := isotp.DefaultConfig()
 - `BlockSize`
 - `StMin`
 
+运行过程中也可以更新后续自动流控帧使用的默认值：
+
+```go
+if err := stack.SetDefaultBlockSize(30); err != nil {
+	return err
+}
+if err := stack.SetDefaultStMin(5); err != nil {
+	return err
+}
+```
+
+`BlockSize` 的有效范围是 0–255；当前发送接口中的 `StMin` 单位为毫秒，
+有效范围是 0–127。
+
+如果需要通过 driver 的 `Write` 自己发送流控帧，可以关闭 TP 层的自动流控：
+
+```go
+stack.SetManualFlowControl(true)
+
+// 收到 First Frame 后，由调用方自行发送 0x30, BlockSize, STmin。
+err := dev.Write(int32(addr.TxID), dev.IsFDMode(), []byte{0x30, 0x1E, 0x05})
+```
+
+`SetManualFlowControl(false)` 可恢复自动流控；默认即为自动模式。手动模式下，
+TP 层仍会维护连续帧接收状态、Block 计数和 N_Cr 超时，但不会自动发送流控帧。
+
 ## UDS 客户端能力
 
 `uds_client.UDSClient` 负责：

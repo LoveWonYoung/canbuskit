@@ -106,7 +106,8 @@ func (t *Transport) handleRxConsecutiveFrame(f *ConsecutiveFrame, txChan chan<- 
 		t.stopReceiving()
 	} else {
 		t.rxBlockCounter++
-		if t.config.BlockSize > 0 && t.rxBlockCounter >= t.config.BlockSize {
+		blockSize, _ := t.flowControlDefaults()
+		if blockSize > 0 && t.rxBlockCounter >= blockSize {
 			t.rxBlockCounter = 0
 			t.sendFlowControl(FlowStatusContinueToSend, txChan)
 			t.resetRxTimer()
@@ -125,10 +126,31 @@ func (t *Transport) resetRxTimer() {
 }
 
 func (t *Transport) sendFlowControl(status FlowStatus, txChan chan<- CanMessage) {
-	payload := createFlowControlPayload(status, t.config.BlockSize, t.config.StMin)
-	msg := t.makeTxMsgWithAddr(t.address, payload)
+	if t.isManualFlowControl() {
+		return
+	}
+
+	msg := t.makeFlowControlMsg(status)
 	select {
 	case txChan <- msg:
 	default:
 	}
+}
+
+func (t *Transport) isManualFlowControl() bool {
+	t.mu.RLock()
+	defer t.mu.RUnlock()
+	return t.manualFlowControl
+}
+
+func (t *Transport) makeFlowControlMsg(status FlowStatus) CanMessage {
+	blockSize, stMin := t.flowControlDefaults()
+	payload := createFlowControlPayload(status, blockSize, stMin)
+	return t.makeTxMsgWithAddr(t.address, payload)
+}
+
+func (t *Transport) flowControlDefaults() (blockSize, stMin int) {
+	t.mu.RLock()
+	defer t.mu.RUnlock()
+	return t.config.BlockSize, t.config.StMin
 }
