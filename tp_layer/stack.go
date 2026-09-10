@@ -38,7 +38,8 @@ type Transport struct {
 	timerTxSTmin *time.Timer
 
 	// Configuration
-	config Config
+	config            Config
+	manualFlowControl bool
 
 	// Error Channel
 	ErrorChan chan error
@@ -84,6 +85,44 @@ func (t *Transport) SetFDMode(isFD bool) {
 	} else {
 		t.MaxDataLength = 8
 	}
+}
+
+// SetDefaultStMin sets the STmin value, in milliseconds, advertised by
+// automatically sent flow-control frames.
+func (t *Transport) SetDefaultStMin(stMin int) error {
+	if stMin < 0 || stMin > 127 {
+		return fmt.Errorf("STmin must be between 0 and 127 milliseconds: %d", stMin)
+	}
+
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	t.config.StMin = stMin
+	return nil
+}
+
+// SetDefaultBlockSize sets the block size advertised by automatically sent
+// flow-control frames. A value of 0 allows all remaining consecutive frames
+// without another flow-control frame.
+func (t *Transport) SetDefaultBlockSize(blockSize int) error {
+	if blockSize < 0 || blockSize > 255 {
+		return fmt.Errorf("block size must be between 0 and 255: %d", blockSize)
+	}
+
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	t.config.BlockSize = blockSize
+	return nil
+}
+
+// SetManualFlowControl controls whether flow-control frames are sent by the
+// transport. When enabled, the transport keeps its receive state and timers but
+// does not automatically send flow-control frames; the caller is responsible
+// for sending them through the CAN driver. Automatic flow control is enabled by
+// default.
+func (t *Transport) SetManualFlowControl(enabled bool) {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	t.manualFlowControl = enabled
 }
 
 // Send sends data. It might block if the send buffer is full.
