@@ -497,7 +497,7 @@ func (p *PCAN) readBurst() {
 			if status != pcanErrorOK {
 				continue
 			}
-			p.enqueueMessage(msg.ID, msg.DLC, msg.Data[:], msg.MsgType)
+			p.enqueueMessage(msg.ID, msg.DLC, msg.Data[:], msg.MsgType, ts)
 		} else {
 			var msg pcanMsg
 			var ts pcanTimestamp
@@ -508,9 +508,15 @@ func (p *PCAN) readBurst() {
 			if status != pcanErrorOK {
 				continue
 			}
-			p.enqueueMessage(msg.ID, msg.Len, msg.Data[:], msg.MsgType)
+			p.enqueueMessage(msg.ID, msg.Len, msg.Data[:], msg.MsgType, pcanClassicTimestampUS(ts))
 		}
 	}
+}
+
+func pcanClassicTimestampUS(ts pcanTimestamp) uint64 {
+	return uint64(ts.Micros) +
+		uint64(ts.Millis)*1_000 +
+		uint64(ts.MillisOverflow)*0x1_0000_0000*1_000
 }
 
 func (p *PCAN) handleReadStatus(status uint32) bool {
@@ -530,7 +536,7 @@ func (p *PCAN) handleReadStatus(status uint32) bool {
 	}
 }
 
-func (p *PCAN) enqueueMessage(id uint32, dlc byte, data []byte, msgType uint8) {
+func (p *PCAN) enqueueMessage(id uint32, dlc byte, data []byte, msgType uint8, timestampUS uint64) {
 	if msgType&(pcanMessageRTR|pcanMessageErrFrame|pcanMessageExtended) != 0 || id > 0x7FF {
 		return
 	}
@@ -549,6 +555,7 @@ func (p *PCAN) enqueueMessage(id uint32, dlc byte, data []byte, msgType uint8) {
 	unified.DLC = dlc
 	unified.IsFD = isFD
 	unified.BRS = isFD && msgType&pcanMessageBRS != 0
+	unified.TimestampUS = timestampUS
 	copy(unified.Data[:], data)
 	if unified.Direction == TX && !p.cfg.IncludeTxEcho {
 		p.observeBusFrame(unified)

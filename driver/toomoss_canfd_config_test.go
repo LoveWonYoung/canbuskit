@@ -65,3 +65,13 @@ func TestToomossDLCToDataLen(t *testing.T) {
 		t.Fatalf("CAN-FD length = %d, want 64", got)
 	}
 }
+
+func TestToomossTimestampUS(t *testing.T) {
+	ticks := (uint64(2) << 32) | 7
+	if got := toomossTimestampUS(2, 7, 10); got != ticks*10 {
+		t.Fatalf("CAN-FD timestamp = %d, want %d", got, ticks*10)
+	}
+	if got := toomossTimestampUS(2, 7, 100); got != ticks*100 {
+		t.Fatalf("classic CAN timestamp = %d, want %d", got, ticks*100)
+	}
+}
