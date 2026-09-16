@@ -1,6 +1,7 @@
 package tp_layer
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"time"
@@ -8,7 +9,7 @@ import (
 
 // initiateTx starts the transmission of a new message.
 // It is called when data arrives on txDataChan and state is Idle.
-func (t *Transport) initiateTx(payload []byte, txChan chan<- CanMessage) {
+func (t *Transport) initiateTx(ctx context.Context, payload []byte, txChan chan<- CanMessage) {
 	t.txBuffer = payload
 	t.txFrameLen = len(payload)
 	maxDataLength := t.maxDataLength()
@@ -30,7 +31,10 @@ func (t *Transport) initiateTx(payload []byte, txChan chan<- CanMessage) {
 
 		msg := t.makeTxMsg(data)
 		// 阻塞发送：对端 STmin=0 时会高速产生 CF，非阻塞入队在 TX 消费略慢时会丢帧并破坏多帧语义。
-		txChan <- msg
+		if err := sendMessage(ctx, txChan, msg); err != nil {
+			t.stopSending()
+			return
+		}
 		// Done
 		t.stopSending() // Resets state to Idle
 
@@ -57,7 +61,10 @@ func (t *Transport) initiateTx(payload []byte, txChan chan<- CanMessage) {
 		t.txState = StateWaitFC
 
 		msg := t.makeTxMsg(data)
-		txChan <- msg
+		if err := sendMessage(ctx, txChan, msg); err != nil {
+			t.stopSending()
+			return
+		}
 
 		// Start FC timeout timer
 		t.resetTxFCTimer()
@@ -71,29 +78,41 @@ func (t *Transport) handleTxFlowControl(fc *FlowControlFrame) {
 		return
 	}
 
-	t.timerRxFC.Stop()
-	t.timerTxSTmin.Stop()
-
 	switch fc.FlowStatus {
 	case FlowStatusContinueToSend:
+		stopTimer(t.timerRxFC)
+		stopTimer(t.timerTxSTmin)
 		t.remoteBlockSize = fc.BlockSize
 		t.remoteSTmin = fc.STmin
 		t.txState = StateTransmit
 		t.txBlockCounter = 0
+		t.txWaitFrames = 0
 		t.resetTxSTminTimer(fc.STmin)
 
 	case FlowStatusWait:
+		t.txWaitFrames++
+		if t.config.MaxWaitFrames >= 0 && t.txWaitFrames > t.config.MaxWaitFrames {
+			t.fireError(fmt.Errorf("too many ISO-TP flow-control WAIT frames: %d", t.txWaitFrames))
+			t.stopSending()
+			return
+		}
 		t.resetTxFCTimer()
 
 	case FlowStatusOverflow:
+		stopTimer(t.timerRxFC)
+		stopTimer(t.timerTxSTmin)
 		t.fireError(errors.New("错误：对方缓冲区溢出，停止发送"))
+		t.stopSending()
+
+	default:
+		t.fireError(fmt.Errorf("invalid ISO-TP flow status: %d", fc.FlowStatus))
 		t.stopSending()
 	}
 }
 
 // handleTxTransmit sends the next Consecutive Frame.
 // It is called when STmin timer expires.
-func (t *Transport) handleTxTransmit(txChan chan<- CanMessage) {
+func (t *Transport) handleTxTransmit(ctx context.Context, txChan chan<- CanMessage) {
 	if len(t.txBuffer) == 0 {
 		t.stopSending()
 		return
@@ -120,7 +139,10 @@ func (t *Transport) handleTxTransmit(txChan chan<- CanMessage) {
 	t.txBlockCounter++
 
 	msg := t.makeTxMsg(data)
-	txChan <- msg
+	if err := sendMessage(ctx, txChan, msg); err != nil {
+		t.stopSending()
+		return
+	}
 
 	if len(t.txBuffer) == 0 {
 		// Transfer finished
@@ -142,21 +164,20 @@ func (t *Transport) handleTxTransmit(txChan chan<- CanMessage) {
 }
 
 func (t *Transport) resetTxFCTimer() {
-	if !t.timerRxFC.Stop() {
-		select {
-		case <-t.timerRxFC.C:
-		default:
-		}
-	}
+	stopTimer(t.timerRxFC)
 	t.timerRxFC.Reset(t.config.TimeoutN_Bs) // N_Bs timeout
 }
 
 func (t *Transport) resetTxSTminTimer(d time.Duration) {
-	if !t.timerTxSTmin.Stop() {
+	stopTimer(t.timerTxSTmin)
+	t.timerTxSTmin.Reset(d)
+}
+
+func stopTimer(timer *time.Timer) {
+	if !timer.Stop() {
 		select {
-		case <-t.timerTxSTmin.C:
+		case <-timer.C:
 		default:
 		}
 	}
-	t.timerTxSTmin.Reset(d)
 }

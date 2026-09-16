@@ -379,8 +379,7 @@ func (c *CanalystII) RxChan() <-chan CanFrame {
 	if c.fanout == nil {
 		return nil
 	}
-	ch, _ := c.fanout.Subscribe(c.cfg.RxBufferSize)
-	return ch
+	return c.fanout.Default(c.cfg.RxBufferSize)
 }
 
 func (c *CanalystII) SubscribeRx(buffer int) (<-chan CanFrame, func()) {

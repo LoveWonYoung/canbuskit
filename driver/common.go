@@ -60,7 +60,7 @@ func dlcToLen(dlc byte) int {
 	case 15:
 		return 64
 	default:
-		return 64
+		return 0
 	}
 }
 
@@ -96,6 +96,15 @@ type CanFrame struct {
 // DataLength returns the payload length represented by DLC.
 func (m CanFrame) DataLength() int {
 	return dlcToLen(m.DLC)
+}
+
+// ValidDataLength returns the payload length and whether DLC is valid for the
+// frame format. Classic CAN accepts DLC 0-8; CAN FD accepts DLC 0-15.
+func (m CanFrame) ValidDataLength() (int, bool) {
+	if (!m.IsFD && m.DLC > 8) || (m.IsFD && m.DLC > 15) {
+		return 0, false
+	}
+	return dlcToLen(m.DLC), true
 }
 
 // CANDriver 定义了CAN/CAN-FD驱动的统一接口

@@ -129,22 +129,14 @@ func loadDLLs() error {
 
 	if runtime.GOARCH == "386" {
 		if registryPath := getRegistryPath(); registryPath != "" {
-			fmt.Println("Found registry path:", registryPath)
 			libusbPath := filepath.Join(registryPath, "libusb-1.0.dll")
-			if _, err := syscall.LoadLibrary(libusbPath); err != nil {
-				fmt.Println("Warning: Failed to load libusb-1.0.dll from", libusbPath, "Error:", err)
-			}
+			_, _ = syscall.LoadLibrary(libusbPath)
 
 			usbPath := filepath.Join(registryPath, "USB2XXX.dll")
 			if handle, err := syscall.LoadLibrary(usbPath); err == nil {
 				UsbDeviceDLL = handle
-				fmt.Println("Loaded DLLs from registry path:", registryPath)
 				return nil
-			} else {
-				fmt.Println("Failed to load USB2XXX.dll from", usbPath, "Error:", err)
 			}
-		} else {
-			fmt.Println("Registry path not found")
 		}
 	}
 
@@ -159,7 +151,6 @@ func loadDLLs() error {
 		return fmt.Errorf("failed to load USB2XXX.dll from %s: %w", usbPath, err)
 	}
 	UsbDeviceDLL = handle
-	log.Printf("Loaded DLLs from default path: %s", usbPath)
 	return nil
 }
 
@@ -259,10 +250,9 @@ func dirFromUninstallString(s string) string {
 	return filepath.Dir(s)
 }
 
-func findRegistryPathInView(uninstall, label string, access uint32) string {
+func findRegistryPathInView(uninstall, _ string, access uint32) string {
 	k, err := registry.OpenKey(registry.LOCAL_MACHINE, uninstall, access)
 	if err != nil {
-		fmt.Println("OpenKey HKLM", label, "view failed:", err)
 		return ""
 	}
 	defer func(k registry.Key) {
@@ -274,11 +264,8 @@ func findRegistryPathInView(uninstall, label string, access uint32) string {
 
 	names, err := k.ReadSubKeyNames(-1)
 	if err != nil {
-		fmt.Println("ReadSubKeyNames failed:", err)
 		return ""
 	}
-
-	fmt.Println("HKLM", label, "view entries:", len(names))
 
 	for _, name := range names {
 		sk, err := registry.OpenKey(registry.LOCAL_MACHINE, uninstall+`\`+name, access)
@@ -300,31 +287,21 @@ func findRegistryPathInView(uninstall, label string, access uint32) string {
 		dnL := strings.ToLower(strings.TrimSpace(displayName))
 
 		if strings.Contains(pubL, "toomoss") || strings.Contains(dnL, "toomoss") {
-			fmt.Println("Matched subkey:", name)
-			fmt.Println("  DisplayName:", displayName)
-			fmt.Println("  Publisher:", publisher)
-
 			install = strings.TrimSpace(install)
 			if install != "" {
-				fmt.Println("  InstallLocation:", install)
 				return filepath.Clean(install)
 			}
 
 			appPath = strings.TrimSpace(appPath)
 			if appPath != "" {
-				fmt.Println("  AppPath:", appPath)
 				return filepath.Clean(appPath)
 			}
 
 			if dir := dirFromUninstallString(unins); dir != "" {
-				fmt.Println("  From UninstallString:", dir)
 				if hasUSB2XXXDLL(dir) {
 					return dir
 				}
-				fmt.Println("  UninstallString path missing USB2XXX.dll")
 			}
-
-			fmt.Println("  No usable path fields")
 		}
 	}
 
@@ -344,18 +321,15 @@ func findRegistryPathInView(uninstall, label string, access uint32) string {
 
 		install = strings.TrimSpace(install)
 		if install != "" && pathLooksToomoss(install) {
-			fmt.Println("Matched InstallLocation by path hint:", name)
 			return filepath.Clean(install)
 		}
 
 		appPath = strings.TrimSpace(appPath)
 		if appPath != "" && pathLooksToomoss(appPath) {
-			fmt.Println("Matched AppPath by path hint:", name)
 			return filepath.Clean(appPath)
 		}
 
 		if dir := dirFromUninstallString(unins); dir != "" && pathLooksToomoss(dir) {
-			fmt.Println("Matched UninstallString by path hint:", name)
 			return dir
 		}
 	}
@@ -1148,8 +1122,7 @@ func (t *Toomoss) RxChan() <-chan CanFrame {
 	if t.fanout == nil {
 		return nil
 	}
-	ch, _ := t.fanout.Subscribe(t.cfg.RxBufferSize)
-	return ch
+	return t.fanout.Default(t.cfg.RxBufferSize)
 }
 
 func (t *Toomoss) SubscribeRx(buffer int) (<-chan CanFrame, func()) {

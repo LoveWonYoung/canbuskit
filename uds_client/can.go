@@ -10,7 +10,10 @@ func convertRXMessage(raw driver.CanFrame) (isotp.CanMessage, bool) {
 		return isotp.CanMessage{}, false
 	}
 
-	length := raw.DataLength()
+	length, valid := raw.ValidDataLength()
+	if !valid {
+		return isotp.CanMessage{}, false
+	}
 	data := make([]byte, length)
 	copy(data, raw.Data[:length])
 

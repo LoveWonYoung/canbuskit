@@ -56,3 +56,15 @@ func TestRxFanoutReportsSubscriberOverflowAndUnsubscribes(t *testing.T) {
 	}
 	unsubscribe()
 }
+
+func TestRxFanoutDefaultSubscriptionIsStable(t *testing.T) {
+	fanout := &rxFanout{subs: make(map[chan CanFrame]struct{}), telemetry: newDriverTelemetry()}
+	first := fanout.Default(1)
+	second := fanout.Default(8)
+	if first != second {
+		t.Fatal("Default returned a new subscription for the same fanout")
+	}
+	if len(fanout.subs) != 1 {
+		t.Fatalf("subscriber count = %d, want 1", len(fanout.subs))
+	}
+}

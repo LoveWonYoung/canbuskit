@@ -1,12 +1,17 @@
 package tp_layer
 
 import (
+	"context"
 	"errors"
 	"fmt"
 )
 
 // ProcessRx Modified to take txChan to allow sending FlowControl frames directly
 func (t *Transport) ProcessRx(msg CanMessage, txChan chan<- CanMessage) {
+	t.processRx(context.Background(), msg, txChan)
+}
+
+func (t *Transport) processRx(ctx context.Context, msg CanMessage, txChan chan<- CanMessage) {
 	if !t.address.IsForMe(&msg) {
 		return
 	}
@@ -18,21 +23,16 @@ func (t *Transport) ProcessRx(msg CanMessage, txChan chan<- CanMessage) {
 
 	switch f := frame.(type) {
 	case *FlowControlFrame:
-		if t.rxState == StateWaitCF {
-			if f.FlowStatus == FlowStatusWait || f.FlowStatus == FlowStatusContinueToSend {
-				t.resetRxTimer()
-			}
-		}
 		t.handleTxFlowControl(f)
 
 	case *SingleFrame:
 		t.handleRxSingleFrame(f)
 
 	case *FirstFrame:
-		t.handleRxFirstFrame(f, txChan)
+		t.handleRxFirstFrame(ctx, f, txChan)
 
 	case *ConsecutiveFrame:
-		t.handleRxConsecutiveFrame(f, txChan)
+		t.handleRxConsecutiveFrame(ctx, f, txChan)
 	}
 }
 
@@ -44,36 +44,38 @@ func (t *Transport) handleRxSingleFrame(f *SingleFrame) {
 	select {
 	case t.rxDataChan <- f.Data:
 	default:
-		fmt.Println("Rx Buffer Full, dropping frame")
+		t.fireError(errors.New("ISO-TP receive queue is full; dropping single frame"))
 	}
 }
 
-func (t *Transport) handleRxFirstFrame(f *FirstFrame, txChan chan<- CanMessage) {
+func (t *Transport) handleRxFirstFrame(ctx context.Context, f *FirstFrame, txChan chan<- CanMessage) {
 	if t.rxState != StateIdle {
 		t.fireError(errors.New("警告：在多帧接收过程中被一个新首帧打断"))
 	}
 	t.stopReceiving()
+	if f.TotalSize <= len(f.Data) {
+		t.fireError(fmt.Errorf("invalid ISO-TP first-frame length %d for %d data bytes", f.TotalSize, len(f.Data)))
+		return
+	}
+	if f.TotalSize > t.config.MaxPayloadSize {
+		t.fireError(fmt.Errorf("ISO-TP payload length %d exceeds configured maximum %d", f.TotalSize, t.config.MaxPayloadSize))
+		return
+	}
 
 	t.rxFrameLen = f.TotalSize
 	t.rxBuffer = make([]byte, 0, f.TotalSize) // Optimize allocation
 	t.rxBuffer = append(t.rxBuffer, f.Data...)
 
-	if len(t.rxBuffer) >= t.rxFrameLen {
-		select {
-		case t.rxDataChan <- t.rxBuffer:
-		default:
-			fmt.Println("Rx Buffer Full, dropping frame")
-		}
+	t.rxState = StateWaitCF
+	t.rxSeqNum = 1
+	if err := t.sendFlowControlContext(ctx, FlowStatusContinueToSend, txChan); err != nil {
 		t.stopReceiving()
-	} else {
-		t.rxState = StateWaitCF
-		t.rxSeqNum = 1
-		t.sendFlowControl(FlowStatusContinueToSend, txChan)
-		t.resetRxTimer()
+		return
 	}
+	t.resetRxTimer()
 }
 
-func (t *Transport) handleRxConsecutiveFrame(f *ConsecutiveFrame, txChan chan<- CanMessage) {
+func (t *Transport) handleRxConsecutiveFrame(ctx context.Context, f *ConsecutiveFrame, txChan chan<- CanMessage) {
 	if t.rxState != StateWaitCF {
 		// Ignore unexpected CF
 		return
@@ -101,7 +103,7 @@ func (t *Transport) handleRxConsecutiveFrame(f *ConsecutiveFrame, txChan chan<- 
 		select {
 		case t.rxDataChan <- completedData:
 		default:
-			fmt.Println("Rx Buffer Full, dropping frame")
+			t.fireError(errors.New("ISO-TP receive queue is full; dropping reassembled payload"))
 		}
 		t.stopReceiving()
 	} else {
@@ -109,32 +111,31 @@ func (t *Transport) handleRxConsecutiveFrame(f *ConsecutiveFrame, txChan chan<- 
 		blockSize, _ := t.flowControlDefaults()
 		if blockSize > 0 && t.rxBlockCounter >= blockSize {
 			t.rxBlockCounter = 0
-			t.sendFlowControl(FlowStatusContinueToSend, txChan)
+			if err := t.sendFlowControlContext(ctx, FlowStatusContinueToSend, txChan); err != nil {
+				t.stopReceiving()
+				return
+			}
 			t.resetRxTimer()
 		}
 	}
 }
 
 func (t *Transport) resetRxTimer() {
-	if !t.timerRxCF.Stop() {
-		select {
-		case <-t.timerRxCF.C:
-		default:
-		}
-	}
+	stopTimer(t.timerRxCF)
 	t.timerRxCF.Reset(t.config.TimeoutN_Cr)
 }
 
 func (t *Transport) sendFlowControl(status FlowStatus, txChan chan<- CanMessage) {
+	_ = t.sendFlowControlContext(context.Background(), status, txChan)
+}
+
+func (t *Transport) sendFlowControlContext(ctx context.Context, status FlowStatus, txChan chan<- CanMessage) error {
 	if t.isManualFlowControl() {
-		return
+		return nil
 	}
 
 	msg := t.makeFlowControlMsg(status)
-	select {
-	case txChan <- msg:
-	default:
-	}
+	return sendMessage(ctx, txChan, msg)
 }
 
 func (t *Transport) isManualFlowControl() bool {

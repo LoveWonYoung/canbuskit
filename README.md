@@ -161,6 +161,8 @@ cfg := isotp.DefaultConfig()
 - `TimeoutN_Cr`（等待连续帧）
 - `BlockSize`
 - `StMin`
+- `MaxPayloadSize`（默认 16 MiB，用于限制异常首帧声明导致的内存分配）
+- `MaxWaitFrames`（默认 8，用于限制对端连续发送 FlowControl/WAIT）
 
 运行过程中也可以更新后续自动流控帧使用的默认值：
 
@@ -212,6 +214,7 @@ TP 层仍会维护连续帧接收状态、Block 计数和 N_Cr 超时，但不�
 - `SetFunctionalAddress(addr)`
 - `UseFunctionalAddress()`
 - `UsePhysicalAddress()`
+- `Errors()`（异步 ISO-TP 错误流，客户端关闭时通道关闭）
 
 例如，直接发送一个未封装的 UDS 请求：
 
@@ -219,12 +222,18 @@ TP 层仍会维护连续帧接收状态、Block 计数和 N_Cr 超时，但不�
 resp, err := client.Request([]byte{0x10, 0x03})
 ```
 
+`RequestOptions` 还可以通过 `ResponsePendingTimeout` 和
+`MaxResponsePending` 控制收到 `0x78 Response Pending` 后的等待时间与最大次数。
+客户端会忽略不属于当前请求 SID 的迟到或无关响应，并支持在重试等待和发送队列阻塞时通过
+`Context` 及时取消。
+
 ## 注意事项
 
 - `driver` 层只提供统一的 `Write(id, fd, data)` 能力，通过 `fd` 标志在同一函数里发送 CAN / CAN-FD。
 - 驱动层只接受 `0x000-0x7FF` 的标准 11 位 CAN ID。
 - UDS 服务请求由调用方通过 `UDSClient.Request(...)` 直接组装。
 - `UDSClient.Close()` 会同时关闭后台 goroutine 和底层设备连接，使用结束后应主动调用。
+- `UDSClient.Close()` 可以安全地重复调用；`NewUDSClient` 成功后由客户端持有并负责关闭底层驱动。
 
 ## 测试
 

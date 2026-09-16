@@ -9,6 +9,28 @@ import (
 	"time"
 )
 
+func TestCanFrameValidDataLength(t *testing.T) {
+	tests := []struct {
+		name  string
+		frame CanFrame
+		want  int
+		valid bool
+	}{
+		{name: "classic", frame: CanFrame{DLC: 8}, want: 8, valid: true},
+		{name: "classic invalid", frame: CanFrame{DLC: 9}, valid: false},
+		{name: "fd", frame: CanFrame{DLC: 15, IsFD: true}, want: 64, valid: true},
+		{name: "fd invalid", frame: CanFrame{DLC: 16, IsFD: true}, valid: false},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			got, valid := tc.frame.ValidDataLength()
+			if got != tc.want || valid != tc.valid {
+				t.Fatalf("ValidDataLength() = (%d, %t), want (%d, %t)", got, valid, tc.want, tc.valid)
+			}
+		})
+	}
+}
+
 func TestDefaultConfig(t *testing.T) {
 	cfg := DefaultConfig(CANFD, CHANNEL2)
 	if cfg.Mode != CANFD {

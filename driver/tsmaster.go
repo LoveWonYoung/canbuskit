@@ -381,8 +381,6 @@ func (t *TSMaster) Init() error {
 	if t.lifecycle.isInitialized() {
 		return nil
 	}
-	fmt.Println("=== TSMaster Initializing ===")
-
 	cfg, err := normalizeConfig(t.cfg)
 	if err != nil {
 		return err
@@ -435,14 +433,10 @@ func (t *TSMaster) Init() error {
 		return cleanup(fmt.Errorf("failed to load TSMaster DLL: %w", err))
 	}
 
-	fmt.Printf("✅ Successfully loaded TSMaster DLL\n")
-	fmt.Printf("📁 DLL Path: %s\n", t.loader.DLLPath)
-
 	// 初始化TSMaster库
 	initialize_lib_tsmaster := t.loader.GetProcAddress("initialize_lib_tsmaster")
 	appName, _ := syscall.UTF16PtrFromString("TSMaster_Go_Demo")
 	r, _, _ := initialize_lib_tsmaster.Call(uintptr(unsafe.Pointer(appName)))
-	fmt.Printf("Initialization result: %d\n", r)
 	if r != 0 {
 		return cleanup(fmt.Errorf("initialize_lib_tsmaster failed: %d", r))
 	}
@@ -450,7 +444,6 @@ func (t *TSMaster) Init() error {
 	// 枚举硬件设备
 	var findDevice int32 = 0
 	r, _, _ = t.loader.GetProcAddress("tsapp_enumerate_hw_devices").Call(uintptr(unsafe.Pointer(&findDevice)))
-	fmt.Printf("Found devices: %d\n", findDevice)
 	if r != 0 {
 		return cleanup(fmt.Errorf("tsapp_enumerate_hw_devices failed: %d", r))
 	}
@@ -462,11 +455,9 @@ func (t *TSMaster) Init() error {
 	}
 	HardwareName, _ := syscall.BytePtrFromString("Hardware")
 	r, _, _ = t.loader.GetProcAddress("tsapp_show_tsmaster_window").Call(uintptr(unsafe.Pointer(HardwareName)), uintptr(1))
-	fmt.Printf("tsapp_show_tsmaster_window: %d\n", r)
 	// 设置CAN通道数量
 	channelCount := uintptr(t.mapping.ApplicationChannel) + 1
 	r, _, _ = t.loader.GetProcAddress("tsapp_set_can_channel_count").Call(channelCount)
-	fmt.Printf("Set CAN channel count result: %d\n", r)
 	if r != 0 {
 		return cleanup(fmt.Errorf("set CAN channel count failed: %d", r))
 	}
@@ -497,15 +488,6 @@ func (t *TSMaster) Init() error {
 		uintptr(t.mapping.HardwareChannel), // 硬件物理通道
 		uintptr(1),                         // 启用映射
 	)
-	fmt.Printf(
-		"Set mapping verbose (%s/%d app=%d hardware=%d:%d) result: %d\n",
-		devName,
-		t.deviceType,
-		t.mapping.ApplicationChannel,
-		t.mapping.HardwareIndex,
-		t.mapping.HardwareChannel,
-		r,
-	)
 	if r != 0 {
 		return cleanup(fmt.Errorf("tsapp_set_mapping_verbose failed: %d", r))
 	}
@@ -520,7 +502,6 @@ func (t *TSMaster) Init() error {
 			uintptr(0),
 			uintptr(1),
 		)
-		fmt.Printf("CAN-FD bitrate configuration result: %d\n", r)
 	} else {
 		r, _, _ = t.loader.GetProcAddress("tsapp_configure_baudrate_can").Call(
 			uintptr(t.mapping.ApplicationChannel),
@@ -528,14 +509,12 @@ func (t *TSMaster) Init() error {
 			uintptr(0),
 			uintptr(1),
 		)
-		fmt.Printf("CAN bitrate configuration result: %d\n", r)
 	}
 	if r != 0 {
 		return cleanup(fmt.Errorf("configure bitrate failed: %d", r))
 	}
 	// 连接设备
 	r, _, _ = t.loader.GetProcAddress("tsapp_connect").Call()
-	fmt.Printf("Connect result: %d\n", r)
 	if r != 0 {
 		return cleanup(fmt.Errorf("tsapp_connect failed: %d", r))
 	}
@@ -570,7 +549,6 @@ func (t *TSMaster) StartWithError() error {
 		return fmt.Errorf("%w: TSMaster", ErrDriverNotInitialized)
 	}
 	if t.lifecycle.start(t.readLoop) {
-		fmt.Println("TSMaster started")
 	}
 	return nil
 }
@@ -667,8 +645,7 @@ func (t *TSMaster) Stop() {
 	}
 
 	if wasInitialized && t.loader != nil && t.isConnected {
-		r, _, _ := t.loader.GetProcAddress("tsapp_disconnect").Call()
-		fmt.Printf("Disconnect result: %d\n", r)
+		_, _, _ = t.loader.GetProcAddress("tsapp_disconnect").Call()
 		t.isConnected = false
 	}
 
@@ -682,7 +659,6 @@ func (t *TSMaster) Stop() {
 		t.rxChan = nil
 	}
 	t.closeTelemetry()
-	fmt.Println("TSMaster stopped")
 }
 
 func (t *TSMaster) Write(id int32, fd bool, data []byte) error {
@@ -726,8 +702,7 @@ func (t *TSMaster) RxChan() <-chan CanFrame {
 	if t.fanout == nil {
 		return nil
 	}
-	ch, _ := t.fanout.Subscribe(t.cfg.RxBufferSize)
-	return ch
+	return t.fanout.Default(t.cfg.RxBufferSize)
 }
 
 func (t *TSMaster) SubscribeRx(buffer int) (<-chan CanFrame, func()) {

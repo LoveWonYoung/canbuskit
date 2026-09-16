@@ -1043,8 +1043,7 @@ func (c *Toomoss) RxChan() <-chan CanFrame {
 	if c.fanout == nil {
 		return nil
 	}
-	ch, _ := c.fanout.Subscribe(c.cfg.RxBufferSize)
-	return ch
+	return c.fanout.Default(c.cfg.RxBufferSize)
 }
 
 func (c *Toomoss) SubscribeRx(buffer int) (<-chan CanFrame, func()) {

@@ -2,6 +2,8 @@ package tp_layer
 
 import (
 	"bytes"
+	"context"
+	"errors"
 	"testing"
 	"time"
 )
@@ -329,6 +331,31 @@ func TestParseFrame_SingleFrame(t *testing.T) {
 	}
 }
 
+func TestEmptySingleFrameRoundTrip(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		fd   bool
+		max  int
+	}{
+		{name: "classic", max: CANMaxDataLength},
+		{name: "fd", fd: true, max: CANFDMaxDataLength},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			payload, err := createSingleFramePayload(nil, tc.max)
+			if err != nil {
+				t.Fatal(err)
+			}
+			frame, err := ParseFrame(&CanMessage{Data: payload, IsFD: tc.fd})
+			if err != nil {
+				t.Fatal(err)
+			}
+			if got := frame.(*SingleFrame).Data; len(got) != 0 {
+				t.Fatalf("decoded payload = % X, want empty", got)
+			}
+		})
+	}
+}
+
 // TestParseFrame_FirstFrame 测试首帧解析
 func TestParseFrame_FirstFrame(t *testing.T) {
 	tests := []struct {
@@ -369,6 +396,73 @@ func TestParseFrame_FirstFrame(t *testing.T) {
 				t.Errorf("数据不匹配\n期望: % 02X\n实际: % 02X", tc.expectedData, ff.Data)
 			}
 		})
+	}
+}
+
+func TestParseFrameRejectsFirstFrameWhoseDataAlreadyMeetsDeclaredLength(t *testing.T) {
+	msg := &CanMessage{
+		ArbitrationID: 0x7E8,
+		Data:          []byte{0x10, 0x03, 0x01, 0x02, 0x03, 0x04},
+	}
+	if _, err := ParseFrame(msg); err == nil {
+		t.Fatal("ParseFrame accepted an invalid First Frame length")
+	}
+}
+
+func TestParseFrameRejectsInvalidFlowStatus(t *testing.T) {
+	msg := &CanMessage{ArbitrationID: 0x7E8, Data: []byte{0x33, 0, 0}}
+	if _, err := ParseFrame(msg); err == nil {
+		t.Fatal("ParseFrame accepted an invalid FlowStatus")
+	}
+}
+
+func TestFirstFramePayloadLimitPreventsAllocation(t *testing.T) {
+	cfg := DefaultConfig()
+	cfg.MaxPayloadSize = 64
+	addr, err := NewAddress(0x7E0, 0x7E8)
+	if err != nil {
+		t.Fatal(err)
+	}
+	transport := NewTransport(addr, cfg)
+	defer transport.cleanup()
+
+	transport.ProcessRx(CanMessage{
+		ArbitrationID: addr.RxID,
+		Data:          []byte{0x10, 0x65, 1, 2, 3, 4, 5, 6},
+	}, make(chan CanMessage, 1))
+	if transport.rxState != StateIdle || transport.rxBuffer != nil {
+		t.Fatalf("oversized First Frame changed receive state: state=%v len=%d", transport.rxState, len(transport.rxBuffer))
+	}
+	select {
+	case <-transport.ErrorChan:
+	default:
+		t.Fatal("oversized First Frame did not report an error")
+	}
+}
+
+func TestSendContextCopiesPayloadAndCanBeCancelled(t *testing.T) {
+	addr, err := NewAddress(0x7E0, 0x7E8)
+	if err != nil {
+		t.Fatal(err)
+	}
+	transport := NewTransport(addr, DefaultConfig())
+	payload := []byte{1, 2, 3}
+	if err := transport.SendContext(context.Background(), payload); err != nil {
+		t.Fatal(err)
+	}
+	payload[0] = 9
+	queued := <-transport.txDataChan
+	if queued[0] != 1 {
+		t.Fatalf("queued payload was mutated through caller slice: %v", queued)
+	}
+
+	for i := 0; i < cap(transport.txDataChan); i++ {
+		transport.txDataChan <- []byte{0}
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	if err := transport.SendContext(ctx, []byte{4}); !errors.Is(err, context.Canceled) {
+		t.Fatalf("SendContext() error = %v, want context.Canceled", err)
 	}
 }
 

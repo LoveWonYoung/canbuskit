@@ -8,9 +8,31 @@ import (
 type rxFanout struct {
 	mu        sync.RWMutex
 	subs      map[chan CanFrame]struct{}
+	defaultCh chan CanFrame
 	closed    bool
 	wg        sync.WaitGroup
 	telemetry *driverTelemetry
+}
+
+// Default returns the stable subscription used by the legacy RxChan API.
+// Repeated RxChan calls therefore do not accumulate unreachable subscribers.
+func (f *rxFanout) Default(buffer int) <-chan CanFrame {
+	if buffer < 0 {
+		buffer = 0
+	}
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if f.defaultCh != nil {
+		return f.defaultCh
+	}
+	ch := make(chan CanFrame, buffer)
+	if f.closed {
+		close(ch)
+		return ch
+	}
+	f.defaultCh = ch
+	f.subs[ch] = struct{}{}
+	return ch
 }
 
 func newRxFanout(ctx context.Context, source <-chan CanFrame, telemetry *driverTelemetry) *rxFanout {
@@ -85,6 +107,7 @@ func (f *rxFanout) closeAll() {
 	f.closed = true
 	subs := f.subs
 	f.subs = nil
+	f.defaultCh = nil
 	f.mu.Unlock()
 
 	for ch := range subs {

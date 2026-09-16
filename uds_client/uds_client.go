@@ -4,7 +4,6 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"log"
 	"sync"
 	"time"
 
@@ -30,8 +29,11 @@ const (
 	driverRxBufferSize     = 100                     // 驱动接收缓冲区大小
 	driverTxBufferSize     = 1024                    // 驱动发送缓冲区（大块请求 + STmin=0 时 CF 突发，适当加大）
 	responsePendingTimeout = 5000 * time.Millisecond // Response Pending 超时
-	defaultMaxRetries      = 3                       // 默认最大重试次数
+	defaultMaxPending      = 16
+	defaultMaxRetries      = 3 // 默认最大重试次数
 )
+
+var ErrClientClosed = errors.New("UDS client is closed")
 
 // UDS 负响应码 (Negative Response Code)
 const (
@@ -125,9 +127,11 @@ func (e *UDSError) IsRetryable() bool {
 
 // RequestOptions 请求配置选项
 type RequestOptions struct {
-	Timeout    time.Duration // 单次请求超时
-	MaxRetries int           // 最大重试次数 (仅对可重试错误生效)
-	RetryDelay time.Duration // 重试间隔
+	Timeout                time.Duration // 单次请求超时
+	MaxRetries             int           // 最大重试次数 (仅对可重试错误生效)
+	RetryDelay             time.Duration // 重试间隔
+	ResponsePendingTimeout time.Duration // 每个 0x78 后等待最终响应的时间
+	MaxResponsePending     int           // 单次请求允许的最大 0x78 数量
 }
 
 // AddressingMode 控制发送请求时使用物理/功能寻址。
@@ -151,10 +155,37 @@ func hasSubFunctionSuppressPositive(sid byte) bool {
 // DefaultRequestOptions 返回默认请求选项
 func DefaultRequestOptions() RequestOptions {
 	return RequestOptions{
-		Timeout:    500 * time.Millisecond,
-		MaxRetries: defaultMaxRetries,
-		RetryDelay: 100 * time.Millisecond,
+		Timeout:                500 * time.Millisecond,
+		MaxRetries:             defaultMaxRetries,
+		RetryDelay:             100 * time.Millisecond,
+		ResponsePendingTimeout: responsePendingTimeout,
+		MaxResponsePending:     defaultMaxPending,
 	}
+}
+
+func normalizeRequestOptions(opts RequestOptions) (RequestOptions, error) {
+	if opts.Timeout <= 0 {
+		return RequestOptions{}, errors.New("request timeout must be greater than zero")
+	}
+	if opts.MaxRetries < 0 {
+		return RequestOptions{}, errors.New("maximum retries must be >= 0")
+	}
+	if opts.RetryDelay < 0 {
+		return RequestOptions{}, errors.New("retry delay must be >= 0")
+	}
+	if opts.ResponsePendingTimeout == 0 {
+		opts.ResponsePendingTimeout = responsePendingTimeout
+	}
+	if opts.ResponsePendingTimeout < 0 {
+		return RequestOptions{}, errors.New("response-pending timeout must be >= 0")
+	}
+	if opts.MaxResponsePending == 0 {
+		opts.MaxResponsePending = defaultMaxPending
+	}
+	if opts.MaxResponsePending < 0 {
+		return RequestOptions{}, errors.New("maximum response-pending count must be >= 0")
+	}
+	return opts, nil
 }
 
 // nrcDescriptions 缓存 NRC 错误描述，避免重复创建 map
@@ -237,28 +268,42 @@ func getNRCDescription(nrc byte) string {
 
 // UDSClient 是一个高级客户端，封装了所有初始化和通信的复杂性
 type UDSClient struct {
-	stack     Transport // 使用接口而非具体结构体
-	driver    driver.CANDriver
-	cancel    context.CancelFunc // 用于控制所有后台goroutine的生命周期
-	ctx       context.Context    // 客户端生命周期 context
-	txErrChan chan error
-	reqMu     sync.Mutex
-	mode      AddressingMode
-	funcAddr  *isotp.Address
+	stack       Transport // 使用接口而非具体结构体
+	driver      driver.CANDriver
+	cancel      context.CancelFunc // 用于控制所有后台goroutine的生命周期
+	ctx         context.Context    // 客户端生命周期 context
+	txErrChan   chan error
+	errors      chan error
+	reqMu       sync.Mutex
+	closeOnce   sync.Once
+	wg          sync.WaitGroup
+	unsubscribe func()
+	mode        AddressingMode
+	funcAddr    *isotp.Address
 }
 
 // NewUDSClient 是新的构造函数，负责完成所有组件的初始化和连接。
 func NewUDSClient(dev driver.CANDriver, addr *isotp.Address, cfg isotp.Config) (*UDSClient, error) {
+	if dev == nil {
+		return nil, errors.New("CAN driver instance cannot be nil")
+	}
 	if err := addr.Validate(); err != nil {
 		return nil, fmt.Errorf("invalid ISO-TP address: %w", err)
 	}
-	if dev == nil {
-		return nil, errors.New("CAN driver instance cannot be nil")
+	if err := cfg.Validate(); err != nil {
+		return nil, fmt.Errorf("invalid ISO-TP configuration: %w", err)
 	}
 	if err := dev.Init(); err != nil {
 		return nil, fmt.Errorf("failed to initialize CAN device: %w", err)
 	}
-	dev.Start()
+	if starter, ok := dev.(driver.ErrorStartingCANDriver); ok {
+		if err := starter.StartWithError(); err != nil {
+			dev.Stop()
+			return nil, fmt.Errorf("failed to start CAN device: %w", err)
+		}
+	} else {
+		dev.Start()
+	}
 
 	stack := isotp.NewTransport(addr, cfg)
 	stack.SetFDMode(dev.IsFDMode())
@@ -271,15 +316,33 @@ func newUDSClient(dev driver.CANDriver, stack Transport) *UDSClient {
 	// 3. 创建用于goroutine生命周期管理的context
 	ctx, cancel := context.WithCancel(context.Background())
 	txErrChan := make(chan error, 16)
+	protocolErrors := make(chan error, 16)
 
 	// 4. 创建内部通信channels，作为协议栈和驱动之间的桥梁
 	rxFromDriver := make(chan isotp.CanMessage, driverRxBufferSize)
 	txToDriver := make(chan isotp.CanMessage, driverTxBufferSize)
-	driverRx := dev.RxChan()
+	var driverRx <-chan driver.CanFrame
+	unsubscribe := func() {}
+	if subscriber, ok := dev.(driver.RxSubscriber); ok {
+		driverRx, unsubscribe = subscriber.SubscribeRx(driverRxBufferSize)
+	} else {
+		driverRx = dev.RxChan()
+	}
+
+	client := &UDSClient{
+		stack:       stack,
+		driver:      dev,
+		cancel:      cancel,
+		ctx:         ctx,
+		txErrChan:   txErrChan,
+		errors:      protocolErrors,
+		mode:        AddressPhysical,
+		unsubscribe: unsubscribe,
+	}
 
 	// 5. 启动所有必要的后台goroutines ("粘合"逻辑)
 	// a. 从驱动接收数据，转换后送入协议栈
-	go func() {
+	client.wg.Go(func() {
 		for {
 			select {
 			case <-ctx.Done():
@@ -299,10 +362,10 @@ func newUDSClient(dev driver.CANDriver, stack Transport) *UDSClient {
 				}
 			}
 		}
-	}()
+	})
 
 	// b. 从协议栈获取待发送数据，通过驱动发送
-	go func() {
+	client.wg.Go(func() {
 		for {
 			select {
 			case <-ctx.Done():
@@ -322,41 +385,49 @@ func newUDSClient(dev driver.CANDriver, stack Transport) *UDSClient {
 				}
 			}
 		}
-	}()
+	})
 
 	// c. 驱动协议栈核心状态机
-	go func() {
+	client.wg.Go(func() {
 		stack.Run(ctx, rxFromDriver, txToDriver)
-	}()
+	})
 
-	// d. 监听协议栈错误 logging (仅当 stack 是具体类型时，或者扩展接口支持 ErrorChan)
-	// 注意：为了保持接口简洁，这里假设 Run 方法内部或外部处理错误，
-	// 或者如果原来的 isotp.Transport 必须暴露 ErrorChan，我们需要在接口中添加 getter，或者在这里做类型断言。
-	// 原代码直接访问 stack.ErrorChan。
-	// 简单起见，如果 stack 是 *isotp.Transport，我们启动错误监听。
-	if s, ok := stack.(*isotp.Transport); ok {
-		go func() {
+	// d. Forward asynchronous errors exposed by the ISO-TP stack.
+	if source, ok := stack.(interface{ Errors() <-chan error }); ok {
+		client.wg.Go(func() {
 			for {
 				select {
 				case <-ctx.Done():
 					return
-				case err := <-s.ErrorChan:
-					log.Printf("[ISOTP Error] %v", err)
+				case err, ok := <-source.Errors():
+					if !ok {
+						return
+					}
+					select {
+					case protocolErrors <- err:
+					default:
+					}
 				}
 			}
-		}()
+		})
 	}
 
-	log.Println("UDS客户端已成功初始化并启动。")
-	return &UDSClient{
-		stack:     stack,
-		driver:    dev,
-		cancel:    cancel,
-		ctx:       ctx,
-		txErrChan: txErrChan,
-		mode:      AddressPhysical,
-	}
+	return client
 }
+
+// Errors reports asynchronous ISO-TP errors. The channel closes with the client.
+func (c *UDSClient) Errors() <-chan error {
+	if c == nil || c.errors == nil {
+		return closedErrors
+	}
+	return c.errors
+}
+
+var closedErrors = func() <-chan error {
+	ch := make(chan error)
+	close(ch)
+	return ch
+}()
 
 // SetFunctionalAddress sets the functional address used when AddressFunctional is active.
 func (c *UDSClient) SetFunctionalAddress(addr *isotp.Address) error {
@@ -469,8 +540,16 @@ func (c *UDSClient) RequestWithContextAndAddressingMode(ctx context.Context, pay
 }
 
 func (c *UDSClient) requestWithContext(ctx context.Context, payload []byte, opts RequestOptions, mode *AddressingMode) ([]byte, error) {
+	if ctx == nil {
+		return nil, errors.New("request context cannot be nil")
+	}
 	if len(payload) == 0 {
 		return nil, errors.New("请求 payload 不能为空")
+	}
+	var err error
+	opts, err = normalizeRequestOptions(opts)
+	if err != nil {
+		return nil, err
 	}
 
 	c.reqMu.Lock()
@@ -485,18 +564,18 @@ func (c *UDSClient) requestWithContext(ctx context.Context, payload []byte, opts
 	}
 
 	requestSID := payload[0]
-	expectedResponseSID := requestSID + 0x40                                                                      // 正响应 SID = 请求 SID + 0x40
 	suppressPositive := hasSubFunctionSuppressPositive(requestSID) && len(payload) >= 2 && (payload[1]&0x80) != 0 // 仅对子功能服务识别 bit7
 
 	var lastErr error
 	var lastResp []byte
 	for attempt := 0; attempt <= opts.MaxRetries; attempt++ {
 		if attempt > 0 {
-			log.Printf("UDS 请求重试 (%d/%d), SID=0x%02X", attempt, opts.MaxRetries, requestSID)
-			time.Sleep(opts.RetryDelay)
+			if err := c.waitForRetry(ctx, opts.RetryDelay); err != nil {
+				return nil, err
+			}
 		}
 
-		response, err := c.singleRequest(ctx, payload, opts.Timeout, suppressPositive)
+		response, err := c.singleRequest(ctx, payload, opts, suppressPositive)
 		if err != nil {
 			// 检查是否是 context 取消
 			if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
@@ -517,20 +596,7 @@ func (c *UDSClient) requestWithContext(ctx context.Context, payload []byte, opts
 			}
 
 			// 其他错误
-			return nil, err
-		}
-
-		// 验证响应 SID
-		if len(response) > 0 && response[0] != expectedResponseSID {
-			// 检查是否是负响应
-			if response[0] == 0x7F && len(response) >= 3 {
-				return response, &UDSError{
-					ServiceID: response[1],
-					NRC:       response[2],
-					Message:   getNRCDescription(response[2]),
-				}
-			}
-			return response, fmt.Errorf("响应 SID 不匹配: 期望 0x%02X, 收到 0x%02X", expectedResponseSID, response[0])
+			return response, err
 		}
 
 		return response, nil
@@ -544,19 +610,20 @@ func (c *UDSClient) requestWithContext(ctx context.Context, payload []byte, opts
 }
 
 // singleRequest 执行单次请求（不含重试逻辑）
-func (c *UDSClient) singleRequest(ctx context.Context, payload []byte, timeout time.Duration, suppressPositive bool) ([]byte, error) {
-	if timeout <= 0 {
-		return nil, errors.New("请求超时必须大于 0")
-	}
-
+func (c *UDSClient) singleRequest(ctx context.Context, payload []byte, opts RequestOptions, suppressPositive bool) ([]byte, error) {
 	c.drainStackRecv()
 	c.drainTxErrors()
 
-	// 发送前清空可能存在的旧响应
-	c.stack.Send(payload) // 将数据包放入发送队列
+	if err := c.sendPayload(ctx, payload); err != nil {
+		return nil, err
+	}
 
-	deadline := time.NewTimer(timeout)
+	deadline := time.NewTimer(opts.Timeout)
 	defer deadline.Stop()
+	currentTimeout := opts.Timeout
+	pendingCount := 0
+	requestSID := payload[0]
+	expectedResponseSID := requestSID + 0x40
 
 	// 为防止测试时未初始化 c.ctx 导致空指针，使用本地 done channel
 	clientDone := (<-chan struct{})(nil)
@@ -572,14 +639,19 @@ func (c *UDSClient) singleRequest(ctx context.Context, payload []byte, timeout t
 		case <-ctx.Done():
 			return nil, ctx.Err()
 		case <-clientDone:
-			return nil, errors.New("UDS 客户端已关闭")
-		case err := <-txErrCh:
-			return nil, err
+			return nil, ErrClientClosed
+		case err, ok := <-txErrCh:
+			if !ok {
+				return nil, errors.New("CAN transmit error channel closed")
+			}
+			if err != nil {
+				return nil, err
+			}
 		case <-deadline.C:
 			if suppressPositive {
 				return nil, nil // 抑制正响应：超时视为成功完成
 			}
-			return nil, fmt.Errorf("等待响应超时 (%v)", timeout)
+			return nil, fmt.Errorf("等待响应超时 (%v)", currentTimeout)
 		case data, ok := <-recvCh:
 			if !ok {
 				return nil, errors.New("transport receive channel closed")
@@ -588,16 +660,18 @@ func (c *UDSClient) singleRequest(ctx context.Context, payload []byte, timeout t
 			if len(data) >= 3 && data[0] == 0x7F {
 				nrc := data[2]
 				serviceSID := data[1]
+				if serviceSID != requestSID {
+					continue
+				}
 
 				// Response Pending - 重置超时继续等待
 				if nrc == RequestCorrectlyReceived_ResponsePending {
-					if !deadline.Stop() {
-						select {
-						case <-deadline.C:
-						default:
-						}
+					pendingCount++
+					if pendingCount > opts.MaxResponsePending {
+						return data, fmt.Errorf("too many UDS response-pending replies: %d", pendingCount)
 					}
-					deadline.Reset(responsePendingTimeout)
+					resetTimer(deadline, opts.ResponsePendingTimeout)
+					currentTimeout = opts.ResponsePendingTimeout
 					continue
 				}
 
@@ -608,9 +682,73 @@ func (c *UDSClient) singleRequest(ctx context.Context, payload []byte, timeout t
 					Message:   getNRCDescription(nrc),
 				}
 			}
+			if len(data) == 0 || data[0] != expectedResponseSID {
+				continue
+			}
 			return data, nil
 		}
 	}
+}
+
+type contextSender interface {
+	SendContext(context.Context, []byte) error
+}
+
+func (c *UDSClient) sendPayload(ctx context.Context, payload []byte) error {
+	if sender, ok := c.stack.(contextSender); ok {
+		sendCtx, cancel := context.WithCancel(ctx)
+		defer cancel()
+		if c.ctx != nil {
+			stop := context.AfterFunc(c.ctx, cancel)
+			defer stop()
+		}
+		if err := sender.SendContext(sendCtx, payload); err != nil {
+			if c.ctx != nil && c.ctx.Err() != nil {
+				return ErrClientClosed
+			}
+			return err
+		}
+		return nil
+	}
+	if c.ctx != nil {
+		select {
+		case <-c.ctx.Done():
+			return ErrClientClosed
+		default:
+		}
+	}
+	c.stack.Send(append([]byte(nil), payload...))
+	return nil
+}
+
+func (c *UDSClient) waitForRetry(ctx context.Context, delay time.Duration) error {
+	if delay == 0 {
+		return nil
+	}
+	timer := time.NewTimer(delay)
+	defer timer.Stop()
+	clientDone := (<-chan struct{})(nil)
+	if c.ctx != nil {
+		clientDone = c.ctx.Done()
+	}
+	select {
+	case <-ctx.Done():
+		return ctx.Err()
+	case <-clientDone:
+		return ErrClientClosed
+	case <-timer.C:
+		return nil
+	}
+}
+
+func resetTimer(timer *time.Timer, timeout time.Duration) {
+	if !timer.Stop() {
+		select {
+		case <-timer.C:
+		default:
+		}
+	}
+	timer.Reset(timeout)
 }
 
 func (c *UDSClient) drainStackRecv() {
@@ -653,13 +791,31 @@ func (c *UDSClient) RequestWithTimeout(payload []byte, timeout time.Duration) ([
 
 // Close 优雅地关闭客户端，释放所有资源。
 func (c *UDSClient) Close() {
-	log.Println("正在关闭UDS客户端...")
-	c.cancel()
-	c.driver.Stop()
+	if c == nil {
+		return
+	}
+	c.closeOnce.Do(func() {
+		if c.cancel != nil {
+			c.cancel()
+		}
+		if c.unsubscribe != nil {
+			c.unsubscribe()
+		}
+		if c.driver != nil {
+			c.driver.Stop()
+		}
+		c.wg.Wait()
+		if c.errors != nil {
+			close(c.errors)
+		}
+	})
 }
 
 // IsClosed 检查客户端是否已关闭
 func (c *UDSClient) IsClosed() bool {
+	if c == nil || c.ctx == nil {
+		return false
+	}
 	select {
 	case <-c.ctx.Done():
 		return true

@@ -44,3 +44,12 @@ func TestConvertRXMessageConvertsStandardFrame(t *testing.T) {
 		t.Fatalf("unexpected converted data: % X", msg.Data)
 	}
 }
+
+func TestConvertRXMessageRejectsInvalidDLCForFrameType(t *testing.T) {
+	if _, ok := convertRXMessage(driver.CanFrame{Direction: driver.RX, ID: 0x123, DLC: 9}); ok {
+		t.Fatal("classic CAN frame with DLC 9 was accepted")
+	}
+	if _, ok := convertRXMessage(driver.CanFrame{Direction: driver.RX, ID: 0x123, DLC: 16, IsFD: true}); ok {
+		t.Fatal("CAN-FD frame with DLC 16 was accepted")
+	}
+}

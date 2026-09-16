@@ -27,6 +27,13 @@ type MockCANDriver struct {
 	initErr   error // Init() 返回的错误
 }
 
+type startFailDriver struct {
+	*MockCANDriver
+	startErr error
+}
+
+func (d *startFailDriver) StartWithError() error { return d.startErr }
+
 // MockResponse 定义一个预设的响应
 type MockResponse struct {
 	Delay time.Duration // 响应延迟
@@ -600,6 +607,121 @@ func TestRequestWithContext_ReturnsResponseOnNRC(t *testing.T) {
 	}
 	if udsErr.NRC != ServiceNotSupported {
 		t.Fatalf("UDSError 的 NRC 不匹配")
+	}
+}
+
+func TestNewUDSClientReturnsDriverStartError(t *testing.T) {
+	dev := &startFailDriver{MockCANDriver: NewMockCANDriver(), startErr: errors.New("start failed")}
+	addr, err := isotp.NewAddress(0x7C6, 0x7C7)
+	if err != nil {
+		t.Fatal(err)
+	}
+	client, err := NewUDSClient(dev, addr, isotp.DefaultConfig())
+	if err == nil || client != nil {
+		t.Fatalf("NewUDSClient() = (%v, %v), want start error", client, err)
+	}
+}
+
+func TestRequestIgnoresResponsesForAnotherService(t *testing.T) {
+	transport := NewMockTransport()
+	client := &UDSClient{stack: transport, mode: AddressPhysical}
+	go func() {
+		time.Sleep(time.Millisecond)
+		transport.PushResponse([]byte{0x7F, 0x10, ServiceNotSupported})
+		transport.PushResponse([]byte{0x50, 0x03})
+		transport.PushResponse([]byte{0x62, 0xF1, 0x90})
+	}()
+
+	resp, err := client.RequestWithContext(context.Background(), []byte{0x22, 0xF1, 0x90}, RequestOptions{Timeout: 100 * time.Millisecond})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(resp) == 0 || resp[0] != 0x62 {
+		t.Fatalf("response = % X, want matching 0x62 response", resp)
+	}
+}
+
+func TestResponsePendingLimitReturnsLastFrame(t *testing.T) {
+	transport := NewMockTransport()
+	client := &UDSClient{stack: transport, mode: AddressPhysical}
+	go func() {
+		time.Sleep(time.Millisecond)
+		transport.PushResponse([]byte{0x7F, 0x22, RequestCorrectlyReceived_ResponsePending})
+		transport.PushResponse([]byte{0x7F, 0x22, RequestCorrectlyReceived_ResponsePending})
+	}()
+	opts := RequestOptions{
+		Timeout:                100 * time.Millisecond,
+		ResponsePendingTimeout: 100 * time.Millisecond,
+		MaxResponsePending:     1,
+	}
+	resp, err := client.RequestWithContext(context.Background(), []byte{0x22}, opts)
+	if err == nil {
+		t.Fatal("expected response-pending limit error")
+	}
+	if len(resp) < 3 || resp[2] != RequestCorrectlyReceived_ResponsePending {
+		t.Fatalf("response = % X, want final response-pending frame", resp)
+	}
+}
+
+func TestRetryDelayHonorsContextCancellation(t *testing.T) {
+	transport := NewMockTransport()
+	client := &UDSClient{stack: transport, mode: AddressPhysical}
+	ctx, cancel := context.WithCancel(context.Background())
+	go func() {
+		time.Sleep(time.Millisecond)
+		transport.PushResponse([]byte{0x7F, 0x22, BusyRepeatRequest})
+		time.Sleep(10 * time.Millisecond)
+		cancel()
+	}()
+	opts := RequestOptions{Timeout: 100 * time.Millisecond, MaxRetries: 1, RetryDelay: time.Second}
+	started := time.Now()
+	_, err := client.RequestWithContext(ctx, []byte{0x22}, opts)
+	if !errors.Is(err, context.Canceled) {
+		t.Fatalf("RequestWithContext() error = %v, want context.Canceled", err)
+	}
+	if elapsed := time.Since(started); elapsed > 250*time.Millisecond {
+		t.Fatalf("context cancellation was delayed by retry sleep: %s", elapsed)
+	}
+}
+
+func TestCloseIsIdempotentAndClosedRequestReturns(t *testing.T) {
+	dev := NewMockCANDriver()
+	client := newUDSClient(dev, NewMockTransport())
+	client.Close()
+	client.Close()
+
+	done := make(chan error, 1)
+	go func() {
+		_, err := client.RequestWithContext(context.Background(), []byte{0x22}, RequestOptions{Timeout: time.Second})
+		done <- err
+	}()
+	select {
+	case err := <-done:
+		if !errors.Is(err, ErrClientClosed) {
+			t.Fatalf("closed request error = %v, want ErrClientClosed", err)
+		}
+	case <-time.After(250 * time.Millisecond):
+		t.Fatal("request blocked after client close")
+	}
+}
+
+func TestErrorsForwardsTransportErrors(t *testing.T) {
+	addr, err := isotp.NewAddress(0x7C6, 0x7C7)
+	if err != nil {
+		t.Fatal(err)
+	}
+	transport := isotp.NewTransport(addr, isotp.DefaultConfig())
+	client := newUDSClient(NewMockCANDriver(), transport)
+	defer client.Close()
+	want := errors.New("transport failure")
+	transport.ErrorChan <- want
+	select {
+	case got := <-client.Errors():
+		if !errors.Is(got, want) {
+			t.Fatalf("Errors() returned %v, want %v", got, want)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("transport error was not forwarded")
 	}
 }
 

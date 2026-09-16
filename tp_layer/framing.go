@@ -32,7 +32,9 @@ func createFlowControlPayload(status FlowStatus, blockSize int, stMinMs int) []b
 func createSingleFramePayload(data []byte, maxDataLength int) ([]byte, error) {
 	dataLen := len(data)
 	var pci []byte
-	if dataLen <= 7 {
+	if dataLen == 0 && maxDataLength > 8 {
+		pci = []byte{pciTypeSingleFrame, 0}
+	} else if dataLen <= 7 {
 		pci = []byte{pciTypeSingleFrame | byte(dataLen)}
 	} else {
 		pci = []byte{pciTypeSingleFrame, byte(dataLen)}
@@ -43,7 +45,7 @@ func createSingleFramePayload(data []byte, maxDataLength int) ([]byte, error) {
 		return nil, fmt.Errorf("单帧总长度 (%d) 超过最大限制 (%d)", totalLength, maxDataLength)
 	}
 
-	payload := make([]byte, 0, totalLength)
+	payload := make([]byte, 0, maxDataLength)
 	payload = append(payload, pci...)
 	payload = append(payload, data...)
 	return payload, nil
@@ -69,7 +71,7 @@ func createFirstFramePayload(firstChunk []byte, totalMessageSize int, maxDataLen
 		return nil, fmt.Errorf("首帧总长度 (%d) 超过最大限制 (%d)", totalLength, maxDataLength)
 	}
 
-	payload := make([]byte, 0, totalLength)
+	payload := make([]byte, 0, maxDataLength)
 	payload = append(payload, pci...)
 	payload = append(payload, firstChunk...)
 	return payload, nil

@@ -8,10 +8,12 @@ import (
 // BenchmarkTransport_Loopback simulates a loopback test to measure throughput
 func BenchmarkTransport_Loopback(b *testing.B) {
 	addr1 := &Address{TxID: 0x1, RxID: 0x2}
-	t1 := NewTransport(addr1, DefaultConfig())
+	cfg := DefaultConfig()
+	cfg.StMin = 0
+	t1 := NewTransport(addr1, cfg)
 
 	addr2 := &Address{TxID: 0x2, RxID: 0x1}
-	t2 := NewTransport(addr2, DefaultConfig())
+	t2 := NewTransport(addr2, cfg)
 
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
@@ -28,16 +30,9 @@ func BenchmarkTransport_Loopback(b *testing.B) {
 
 	b.ResetTimer()
 	for i := 0; i < b.N; i++ {
-		// Send from T1
-		go t1.Send(payload)
-
-		// Block receive on T2
-		// Since Recv is non-blocking (returns nil if empty), we need to poll
-		for {
-			if _, ok := t2.Recv(); ok {
-				break
-			}
-			// Spin loop (benchmark)
+		if err := t1.SendContext(ctx, payload); err != nil {
+			b.Fatal(err)
 		}
+		<-t2.RecvChan()
 	}
 }

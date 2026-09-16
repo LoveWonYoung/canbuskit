@@ -2,6 +2,7 @@ package tp_layer
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"sync"
 	"time"
@@ -31,6 +32,7 @@ type Transport struct {
 	txBlockCounter  int
 	remoteBlockSize int
 	remoteSTmin     time.Duration
+	txWaitFrames    int
 
 	// Native timers
 	timerRxCF    *time.Timer
@@ -39,6 +41,7 @@ type Transport struct {
 
 	// Configuration
 	config            Config
+	configErr         error
 	manualFlowControl bool
 
 	// Error Channel
@@ -46,6 +49,13 @@ type Transport struct {
 }
 
 func NewTransport(address *Address, cfg Config) *Transport {
+	normalized, configErr := normalizeConfig(cfg)
+	cfg = normalized
+	if err := address.Validate(); err != nil {
+		configErr = errors.Join(configErr, err)
+	} else {
+		address = &Address{TxID: address.TxID, RxID: address.RxID}
+	}
 	t := &Transport{
 		address:       address,
 		rxDataChan:    make(chan []byte, 10), // Buffer size can be tuned
@@ -57,6 +67,7 @@ func NewTransport(address *Address, cfg Config) *Transport {
 		timerRxFC:    time.NewTimer(time.Hour),
 		timerTxSTmin: time.NewTimer(time.Hour),
 		config:       cfg,
+		configErr:    configErr,
 		ErrorChan:    make(chan error, 10),
 	}
 	t.timerRxCF.Stop()
@@ -73,7 +84,11 @@ func NewTransport(address *Address, cfg Config) *Transport {
 func (t *Transport) SetTxAddress(addr *Address) {
 	t.mu.Lock()
 	defer t.mu.Unlock()
-	t.txAddress = addr
+	if addr == nil {
+		t.txAddress = nil
+		return
+	}
+	t.txAddress = &Address{TxID: addr.TxID, RxID: addr.RxID}
 }
 
 func (t *Transport) SetFDMode(isFD bool) {
@@ -125,9 +140,30 @@ func (t *Transport) SetManualFlowControl(enabled bool) {
 	t.manualFlowControl = enabled
 }
 
-// Send sends data. It might block if the send buffer is full.
+// Send sends a copy of data. It might block if the send buffer is full.
 func (t *Transport) Send(data []byte) {
-	t.txDataChan <- data
+	_ = t.SendContext(context.Background(), data)
+
+}
+
+// SendContext queues a copy of data or returns when ctx is cancelled.
+func (t *Transport) SendContext(ctx context.Context, data []byte) error {
+	if ctx == nil {
+		return errors.New("send context cannot be nil")
+	}
+	if t.configErr != nil {
+		return t.configErr
+	}
+	if len(data) > t.config.MaxPayloadSize {
+		return fmt.Errorf("ISO-TP payload length %d exceeds configured maximum %d", len(data), t.config.MaxPayloadSize)
+	}
+	payload := append([]byte(nil), data...)
+	select {
+	case t.txDataChan <- payload:
+		return nil
+	case <-ctx.Done():
+		return ctx.Err()
+	}
 }
 
 // Recv receives data. It matches the old signature but now pulls from channel.
@@ -148,9 +184,18 @@ func (t *Transport) RecvChan() <-chan []byte {
 	return t.rxDataChan
 }
 
+// Errors returns asynchronous protocol and queue errors.
+func (t *Transport) Errors() <-chan error {
+	return t.ErrorChan
+}
+
 // Run starts the protocol stack event loop.
 func (t *Transport) Run(ctx context.Context, rxChan <-chan CanMessage, txChan chan<- CanMessage) {
 	defer t.cleanup()
+	if t.configErr != nil {
+		t.fireError(t.configErr)
+		return
+	}
 
 	for {
 		var txDataEnable <-chan []byte
@@ -165,23 +210,23 @@ func (t *Transport) Run(ctx context.Context, rxChan <-chan CanMessage, txChan ch
 			if !ok {
 				return
 			}
-			t.ProcessRx(msg, txChan)
+			t.processRx(ctx, msg, txChan)
 		case data, ok := <-txDataEnable:
 			if !ok {
 				return
 			}
-			t.initiateTx(data, txChan)
+			t.initiateTx(ctx, data, txChan)
 		case <-t.timerRxCF.C:
-			fmt.Println("接收连续帧超时，重置接收状态。")
+			t.fireError(errors.New("timed out waiting for ISO-TP consecutive frame"))
 			t.stopReceiving()
 		case <-t.timerRxFC.C:
-			fmt.Println("等待流控帧超时，停止发送。")
+			t.fireError(errors.New("timed out waiting for ISO-TP flow-control frame"))
 			t.stopSending()
 		case <-t.timerTxSTmin.C:
 			if t.txState != StateTransmit {
 				continue
 			}
-			t.handleTxTransmit(txChan)
+			t.handleTxTransmit(ctx, txChan)
 		}
 	}
 }
@@ -199,12 +244,7 @@ func (t *Transport) stopReceiving() {
 	t.rxFrameLen = 0
 	t.rxSeqNum = 0
 	t.rxBlockCounter = 0
-	if !t.timerRxCF.Stop() {
-		select {
-		case <-t.timerRxCF.C:
-		default:
-		}
-	}
+	stopTimer(t.timerRxCF)
 }
 
 func (t *Transport) stopSending() {
@@ -213,18 +253,9 @@ func (t *Transport) stopSending() {
 	t.txFrameLen = 0
 	t.txSeqNum = 0
 	t.txBlockCounter = 0
-	if !t.timerRxFC.Stop() {
-		select {
-		case <-t.timerRxFC.C:
-		default:
-		}
-	}
-	if !t.timerTxSTmin.Stop() {
-		select {
-		case <-t.timerTxSTmin.C:
-		default:
-		}
-	}
+	t.txWaitFrames = 0
+	stopTimer(t.timerRxFC)
+	stopTimer(t.timerTxSTmin)
 }
 
 func (t *Transport) makeTxMsg(data []byte) CanMessage {
@@ -242,7 +273,9 @@ func (t *Transport) makeTxMsgWithAddr(addr *Address, data []byte) CanMessage {
 	isFD := t.IsFD
 	t.mu.RUnlock()
 
-	fullPayload := append([]byte(nil), data...)
+	// Frame constructors return newly owned slices, so the transport can pass
+	// them through without another per-frame copy.
+	fullPayload := data
 
 	// Padding
 	if t.config.PaddingByte != nil {
@@ -252,11 +285,17 @@ func (t *Transport) makeTxMsgWithAddr(addr *Address, data []byte) CanMessage {
 		}
 
 		if len(fullPayload) < targetLen {
-			padding := make([]byte, targetLen-len(fullPayload))
-			for i := range padding {
-				padding[i] = *t.config.PaddingByte
+			originalLen := len(fullPayload)
+			if cap(fullPayload) >= targetLen {
+				fullPayload = fullPayload[:targetLen]
+			} else {
+				padded := make([]byte, targetLen)
+				copy(padded, fullPayload)
+				fullPayload = padded
 			}
-			fullPayload = append(fullPayload, padding...)
+			for i := originalLen; i < targetLen; i++ {
+				fullPayload[i] = *t.config.PaddingByte
+			}
 		}
 	}
 
@@ -264,6 +303,15 @@ func (t *Transport) makeTxMsgWithAddr(addr *Address, data []byte) CanMessage {
 		ArbitrationID: addr.TxID,
 		Data:          fullPayload,
 		IsFD:          isFD,
+	}
+}
+
+func sendMessage(ctx context.Context, txChan chan<- CanMessage, msg CanMessage) error {
+	select {
+	case txChan <- msg:
+		return nil
+	case <-ctx.Done():
+		return ctx.Err()
 	}
 }
 
@@ -299,9 +347,11 @@ func nextFDTargetLength(length int) int {
 
 // fireError sends an error to the ErrorChan. Non-blocking.
 func (t *Transport) fireError(err error) {
+	if err == nil {
+		return
+	}
 	select {
 	case t.ErrorChan <- err:
 	default:
-		fmt.Println("ISOTP Error (Chan Full):", err)
 	}
 }

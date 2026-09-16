@@ -2,7 +2,10 @@ package tp_layer
 
 import (
 	"bytes"
+	"context"
+	"errors"
 	"testing"
+	"time"
 )
 
 func TestSetDefaultFlowControlValues(t *testing.T) {
@@ -24,6 +27,79 @@ func TestSetDefaultFlowControlValues(t *testing.T) {
 	msg := <-txChan
 	if !bytes.Equal(msg.Data, []byte{0x30, 0x08, 0x0F}) {
 		t.Fatalf("unexpected flow-control payload: % X", msg.Data)
+	}
+}
+
+func TestConfigValidation(t *testing.T) {
+	if err := DefaultConfig().Validate(); err != nil {
+		t.Fatalf("DefaultConfig().Validate() failed: %v", err)
+	}
+	invalid := DefaultConfig()
+	invalid.TimeoutN_Cr = 0
+	if err := invalid.Validate(); err == nil {
+		t.Fatal("Config.Validate accepted a zero N_Cr timeout")
+	}
+	invalid = DefaultConfig()
+	invalid.MaxPayloadSize = -1
+	if err := invalid.Validate(); err == nil {
+		t.Fatal("Config.Validate accepted a negative payload limit")
+	}
+}
+
+func TestFlowControlSendHonorsCancellationWhenOutputBlocked(t *testing.T) {
+	addr, err := NewAddress(0x7C6, 0x7C7)
+	if err != nil {
+		t.Fatal(err)
+	}
+	transport := NewTransport(addr, DefaultConfig())
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+
+	err = transport.sendFlowControlContext(ctx, FlowStatusContinueToSend, make(chan CanMessage))
+	if !errors.Is(err, context.Canceled) {
+		t.Fatalf("sendFlowControlContext() error = %v, want context.Canceled", err)
+	}
+}
+
+func TestInvalidFlowStatusStopsTransmission(t *testing.T) {
+	addr, err := NewAddress(0x7C6, 0x7C7)
+	if err != nil {
+		t.Fatal(err)
+	}
+	transport := NewTransport(addr, DefaultConfig())
+	defer transport.cleanup()
+	transport.txState = StateWaitFC
+	transport.resetTxFCTimer()
+
+	transport.handleTxFlowControl(&FlowControlFrame{FlowStatus: FlowStatus(3)})
+	if transport.txState != StateIdle {
+		t.Fatalf("txState = %v, want StateIdle", transport.txState)
+	}
+	select {
+	case err := <-transport.ErrorChan:
+		if err == nil {
+			t.Fatal("expected a non-nil invalid-flow-status error")
+		}
+	case <-time.After(time.Second):
+		t.Fatal("invalid flow status did not report an error")
+	}
+}
+
+func TestWaitFrameLimitStopsTransmission(t *testing.T) {
+	cfg := DefaultConfig()
+	cfg.MaxWaitFrames = 1
+	addr, err := NewAddress(0x7C6, 0x7C7)
+	if err != nil {
+		t.Fatal(err)
+	}
+	transport := NewTransport(addr, cfg)
+	defer transport.cleanup()
+	transport.txState = StateWaitFC
+
+	transport.handleTxFlowControl(&FlowControlFrame{FlowStatus: FlowStatusWait})
+	transport.handleTxFlowControl(&FlowControlFrame{FlowStatus: FlowStatusWait})
+	if transport.txState != StateIdle {
+		t.Fatalf("txState = %v, want StateIdle after excessive WAIT frames", transport.txState)
 	}
 }
 

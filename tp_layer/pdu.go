@@ -46,6 +46,9 @@ func ParseFrame(msg *CanMessage) (ISOTPFrame, error) {
 		length := int(payload[0] & 0x0F)
 		var data []byte
 		if length == 0 { // Escaped length for CAN FD
+			if len(payload) == 1 {
+				return &SingleFrame{Data: []byte{}}, nil
+			}
 			if len(payload) < 2 {
 				return nil, fmt.Errorf("SF(FD)长度不足2字节")
 			}
@@ -73,6 +76,12 @@ func ParseFrame(msg *CanMessage) (ISOTPFrame, error) {
 			}
 			totalSize = int(binary.BigEndian.Uint32(payload[2:6]))
 			dataStart = 6
+			if totalSize <= 4095 {
+				return nil, fmt.Errorf("FF(long)长度 %d 应使用12位格式", totalSize)
+			}
+		}
+		if totalSize <= len(payload)-dataStart {
+			return nil, fmt.Errorf("FF总长度 %d 不大于首帧数据长度 %d", totalSize, len(payload)-dataStart)
 		}
 		return &FirstFrame{TotalSize: totalSize, Data: payload[dataStart:]}, nil
 	case 0x20: // Consecutive Frame
@@ -81,8 +90,12 @@ func ParseFrame(msg *CanMessage) (ISOTPFrame, error) {
 		if len(payload) < 3 {
 			return nil, fmt.Errorf("FC长度不足3字节")
 		}
+		status := FlowStatus(payload[0] & 0x0F)
+		if status > FlowStatusOverflow {
+			return nil, fmt.Errorf("无效FC状态: 0x%X", status)
+		}
 		return &FlowControlFrame{
-			FlowStatus: FlowStatus(payload[0] & 0x0F),
+			FlowStatus: status,
 			BlockSize:  int(payload[1]),
 			STmin:      decodeSTmin(payload[2]),
 		}, nil

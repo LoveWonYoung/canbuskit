@@ -267,20 +267,19 @@ func classicCANFrameBits(frame CanFrame) int {
 		payload = 8
 	}
 
-	bits := make([]byte, 0, 34+8*payload)
-	bits = appendBits(bits, 0, 1) // SOF
-	bits = appendBits(bits, uint32(frame.ID), 11)
-	bits = appendBits(bits, 0, 1) // RTR
-	bits = appendBits(bits, 0, 1) // IDE
-	bits = appendBits(bits, 0, 1) // r0
-	bits = appendBits(bits, uint32(frame.DLC&0xF), 4)
+	var counter canBitCounter
+	counter.addCRC(0, 1) // SOF
+	counter.addCRC(uint32(frame.ID), 11)
+	counter.addCRC(0, 1) // RTR
+	counter.addCRC(0, 1) // IDE
+	counter.addCRC(0, 1) // r0
+	counter.addCRC(uint32(frame.DLC&0xF), 4)
 	for i := 0; i < payload; i++ {
-		bits = appendBits(bits, uint32(frame.Data[i]), 8)
+		counter.addCRC(uint32(frame.Data[i]), 8)
 	}
-	crc := crc15CAN(bits)
-	bits = appendBits(bits, uint32(crc), 15)
+	counter.add(uint32(counter.crc), 15)
 
-	return stuffedBitCount(bits) +
+	return counter.total +
 		1 + // CRC delimiter
 		1 + // ACK
 		1 + // ACK delimiter
@@ -320,46 +319,45 @@ func canFDFrameBits(frame CanFrame) (arbBits, dataBits int) {
 	return arbStuffed + canFDAckTrailer, stuffed - arbStuffed + canFDCrcDelimiter
 }
 
-func appendBits(dst []byte, value uint32, n int) []byte {
+type canBitCounter struct {
+	crc   uint16
+	total int
+	run   int
+	prev  byte
+	set   bool
+}
+
+func (c *canBitCounter) addCRC(value uint32, n int) {
 	for i := n - 1; i >= 0; i-- {
-		dst = append(dst, byte((value>>i)&1))
+		bit := byte((value >> i) & 1)
+		msb := byte((c.crc >> 14) & 1)
+		c.crc = (c.crc << 1) & 0x7fff
+		if msb^bit == 1 {
+			c.crc ^= 0x4599
+		}
+		c.count(bit)
 	}
-	return dst
 }
 
-func crc15CAN(bits []byte) uint16 {
-	var crc uint16
-	for _, bit := range bits {
-		msb := byte((crc >> 14) & 1)
-		crc = (crc << 1) & 0x7fff
-		if msb^(bit&1) == 1 {
-			crc ^= 0x4599
-		}
+func (c *canBitCounter) add(value uint32, n int) {
+	for i := n - 1; i >= 0; i-- {
+		c.count(byte((value >> i) & 1))
 	}
-	return crc
 }
 
-func stuffedBitCount(bits []byte) int {
-	if len(bits) == 0 {
-		return 0
+func (c *canBitCounter) count(bit byte) {
+	bit &= 1
+	c.total++
+	if c.set && bit == c.prev {
+		c.run++
+	} else {
+		c.prev = bit
+		c.run = 1
+		c.set = true
 	}
-	total := 0
-	run := 0
-	prev := byte(2)
-	for _, bit := range bits {
-		bit &= 1
-		total++
-		if bit == prev {
-			run++
-		} else {
-			prev = bit
-			run = 1
-		}
-		if run == 5 {
-			total++
-			prev ^= 1
-			run = 1
-		}
+	if c.run == 5 {
+		c.total++
+		c.prev ^= 1
+		c.run = 1
 	}
-	return total
 }

@@ -172,7 +172,6 @@ type Vector struct {
 	canReceiveProc            *syscall.LazyProc
 	canTransmitProc           *syscall.LazyProc
 	canTransmitExProc         *syscall.LazyProc
-	getErrorStringProc        *syscall.LazyProc
 
 	portHandle     int32
 	channelIndex   int32
@@ -447,8 +446,7 @@ func (v *Vector) RxChan() <-chan CanFrame {
 	if v.fanout == nil {
 		return nil
 	}
-	ch, _ := v.fanout.Subscribe(v.cfg.RxBufferSize)
-	return ch
+	return v.fanout.Default(v.cfg.RxBufferSize)
 }
 
 func (v *Vector) SubscribeRx(buffer int) (<-chan CanFrame, func()) {
@@ -565,7 +563,6 @@ func (v *Vector) loadDLL() error {
 		v.canReceiveProc = dll.NewProc("xlCanReceive")
 		v.canTransmitProc = dll.NewProc("xlCanTransmit")
 		v.canTransmitExProc = dll.NewProc("xlCanTransmitEx")
-		v.getErrorStringProc = dll.NewProc("xlGetErrorString")
 		break
 	}
 
@@ -589,7 +586,6 @@ func (v *Vector) loadDLL() error {
 		"xlCanReceive":            v.canReceiveProc,
 		"xlCanTransmit":           v.canTransmitProc,
 		"xlCanTransmitEx":         v.canTransmitExProc,
-		"xlGetErrorString":        v.getErrorStringProc,
 	} {
 		if err := proc.Find(); err != nil {
 			return fmt.Errorf("vector proc %s not found: %w", name, err)
@@ -829,26 +825,14 @@ func (v *Vector) callStatus(proc *syscall.LazyProc, args ...uintptr) error {
 }
 
 func (v *Vector) errorString(status int16) string {
-	if v.getErrorStringProc == nil {
+	switch status {
+	case vectorStatusSuccess:
+		return "success"
+	case vectorStatusQueueIsEmpty:
+		return "receive queue is empty"
+	default:
 		return fmt.Sprintf("status=%d", status)
 	}
-	ptr, _, _ := v.getErrorStringProc.Call(uintptr(status))
-	if ptr == 0 {
-		return fmt.Sprintf("status=%d", status)
-	}
-	return bytePtrToString((*byte)(unsafe.Pointer(ptr)))
-}
-
-func bytePtrToString(p *byte) string {
-	if p == nil {
-		return ""
-	}
-	buf := make([]byte, 0, 128)
-	for *p != 0 {
-		buf = append(buf, *p)
-		p = (*byte)(unsafe.Pointer(uintptr(unsafe.Pointer(p)) + 1))
-	}
-	return string(buf)
 }
 
 func (v *Vector) IsFDMode() bool {

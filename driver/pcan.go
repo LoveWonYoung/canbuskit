@@ -295,8 +295,7 @@ func (p *PCAN) RxChan() <-chan CanFrame {
 	if p.fanout == nil {
 		return nil
 	}
-	ch, _ := p.fanout.Subscribe(p.cfg.RxBufferSize)
-	return ch
+	return p.fanout.Default(p.cfg.RxBufferSize)
 }
 
 func (p *PCAN) SubscribeRx(buffer int) (<-chan CanFrame, func()) {
