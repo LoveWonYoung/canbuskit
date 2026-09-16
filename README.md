@@ -10,6 +10,8 @@
 
 当前硬件驱动统一支持标准 11 位 ID 的 CAN / CAN FD 数据帧；29 位扩展帧不在驱动层支持范围内。
 
+接收帧的 `driver.CanFrame.TimestampUS` 保存硬件/驱动提供的单调时间戳，并统一为微秒；值为 0 表示该后端未提供硬件时间戳。Toomoss、TSMaster、PCAN 和 Vector 支持该字段，CanalystII 暂不处理。
+
 ## 模块结构
 
 仓库主要分成三层：

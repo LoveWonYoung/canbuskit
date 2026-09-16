@@ -495,7 +495,7 @@ type CAN_INIT_CONFIG struct {
 
 type CAN_MSG struct {
 	ID            int32
-	TimeStamp     int32
+	TimeStamp     uint32
 	RemoteFlag    byte
 	ExternFlag    byte
 	DataLen       byte
@@ -504,13 +504,13 @@ type CAN_MSG struct {
 }
 
 type CANFD_MSG struct {
-	ID        uint32
-	DLC       byte
-	Flags     byte
-	__Res0    byte
-	__Res1    byte
-	TimeStamp uint32
-	Data      [64]byte
+	ID            uint32
+	DLC           byte
+	Flags         byte
+	__Res0        byte
+	TimeStampHigh byte
+	TimeStamp     uint32
+	Data          [64]byte
 }
 
 const (
@@ -916,7 +916,8 @@ func (t *Toomoss) readLoop() {
 				normalizedDLC := dataLenToDlc(actualLen)
 				unifiedMsg := CanFrame{
 					Direction: RX, ID: msg.ID, DLC: normalizedDLC, Data: msg.Data, IsFD: isFD,
-					BRS: isFD && msg.Flags&CANFD_MSG_FLAG_BRS != 0,
+					BRS:         isFD && msg.Flags&CANFD_MSG_FLAG_BRS != 0,
+					TimestampUS: toomossTimestampUS(msg.TimeStampHigh, msg.TimeStamp, 10),
 				}
 
 				msgType := t.canType
@@ -980,11 +981,12 @@ func (t *Toomoss) readClassicBurst(canMsg *[MsgBufferSize]CAN_MSG) {
 			copy(data[:], msg.Data[:actualLen])
 		}
 		unifiedMsg := CanFrame{
-			Direction: direction,
-			ID:        id,
-			DLC:       dataLenToDlc(actualLen),
-			Data:      data,
-			IsFD:      false,
+			Direction:   direction,
+			ID:          id,
+			DLC:         dataLenToDlc(actualLen),
+			Data:        data,
+			IsFD:        false,
+			TimestampUS: toomossTimestampUS(msg.TimeStampHigh, msg.TimeStamp, 100),
 		}
 
 		logCANMessage("RX", unifiedMsg.ID, unifiedMsg.DLC, unifiedMsg.Data[:actualLen], CAN)

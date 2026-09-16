@@ -627,12 +627,14 @@ func (t *TSMaster) readLoop() {
 				case 0:
 					unifiedMsg = CanFrame{
 						Direction: RX, ID: uint32(msg.FIdentifier), DLC: msg.FDLC, Data: msg.FData, IsFD: msg.FFDProperties&tsCANFDPropertyEDL != 0, BRS: msg.FFDProperties&tsCANFDPropertyBRS != 0,
+						TimestampUS: tsmasterTimestampUS(msg.FTimeUs),
 					}
 
 					logCANMessage("RX", unifiedMsg.ID, unifiedMsg.DLC, unifiedMsg.Data[:dlcToLen(unifiedMsg.DLC)], msgType)
 				case 1:
 					unifiedMsg = CanFrame{
 						Direction: TX, ID: uint32(msg.FIdentifier), DLC: msg.FDLC, Data: msg.FData, IsFD: msg.FFDProperties&tsCANFDPropertyEDL != 0, BRS: msg.FFDProperties&tsCANFDPropertyBRS != 0,
+						TimestampUS: tsmasterTimestampUS(msg.FTimeUs),
 					}
 					if !t.cfg.IncludeTxEcho {
 						t.observeBusFrame(unifiedMsg)
@@ -645,6 +647,13 @@ func (t *TSMaster) readLoop() {
 			}
 		}
 	}
+}
+
+func tsmasterTimestampUS(timestamp int64) uint64 {
+	if timestamp < 0 {
+		return 0
+	}
+	return uint64(timestamp)
 }
 
 func (t *TSMaster) Stop() {

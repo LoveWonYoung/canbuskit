@@ -88,6 +88,9 @@ type CanFrame struct {
 	Data      [64]byte // 使用64字节以兼容CAN-FD
 	IsFD      bool     // 标志位，用于区分是CAN还是CAN-FD消息
 	BRS       bool     // CAN-FD bit rate switch; ignored for classic CAN
+	// TimestampUS is the vendor hardware/driver monotonic timestamp normalized
+	// to microseconds. Zero means that no hardware timestamp is available.
+	TimestampUS uint64
 }
 
 // DataLength returns the payload length represented by DLC.

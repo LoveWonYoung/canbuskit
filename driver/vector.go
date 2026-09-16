@@ -750,6 +750,7 @@ func (v *Vector) readOneCanFD() bool {
 	unified.DLC = dlc
 	unified.IsFD = msg.MsgFlags&vectorCanFdRxFlagEDL != 0
 	unified.BRS = unified.IsFD && msg.MsgFlags&vectorCanFdRxFlagBRS != 0
+	unified.TimestampUS = event.TimeStamp / 1_000
 	copy(unified.Data[:], msg.Data[:payloadLen])
 	if unified.Direction == TX && !v.cfg.IncludeTxEcho {
 		v.observeBusFrame(unified)
@@ -806,6 +807,7 @@ func (v *Vector) readOneCAN() bool {
 	unified.ID = event.TagData.Msg.ID & 0x1FFFFFFF
 	unified.DLC = dlc
 	unified.IsFD = false
+	unified.TimestampUS = event.TimeStamp / 1_000
 	copy(unified.Data[:], event.TagData.Msg.Data[:payloadLen])
 
 	logCANMessage("RX", unified.ID, unified.DLC, unified.Data[:payloadLen], CAN)
