@@ -115,6 +115,95 @@ vector := driver.NewVectorWithConfig(cfg, driver.CANOEVN1640)
 auto := driver.NewAutoDriverWithConfig(cfg)
 ```
 
+### Preset 模式
+
+`preset` 默认只初始化 CAN 设备，不再自动创建或注册 UDS 客户端。此时直接使用
+`Write` 和 `Read` 收发原始 CAN / CAN FD 帧：
+
+```go
+p, err := preset.NewPresetToomoss(0x7C6, 0x7C7, 0x7DF, driver.CHANNEL1, driver.CANFD)
+if err != nil {
+	log.Fatal(err)
+}
+defer p.Close()
+
+if err := p.Write(0x7C6, true, []byte{0x03, 0x22, 0xF1, 0x90}); err != nil {
+	log.Fatal(err)
+}
+frame := <-p.Read()
+```
+
+需要 ISO-TP / UDS 能力时显式打开开关：
+
+```go
+p, err := preset.NewPresetToomoss(
+	0x7C6, 0x7C7, 0x7DF,
+	driver.CHANNEL1, driver.CANFD,
+	preset.WithUDSClient(true),
+)
+if err != nil {
+	log.Fatal(err)
+}
+defer p.Close()
+
+resp, err := p.Request([]byte{0x22, 0xF1, 0x90}, time.Second)
+```
+
+未启用 UDS 时调用 `Request`、`FunctionRequest`、`SetDefaultBlockSize` 或
+`SetDefaultStMin` 会返回 `preset.ErrUDSClientDisabled`；`SetManualFlowControl`
+则保持为空操作。
+
+不启用 UDS client 也可以显式构造并发送单个 ISO-TP 帧。这些接口是无状态的，
+不会启动 TP 状态机或增加 RX 订阅，适合手动验证首帧、流控和连续帧时序：
+
+```go
+// Single Frame: 03 22 F1 90
+err = p.WriteTPSingleFrame(0x7C6, false, []byte{0x22, 0xF1, 0x90})
+
+// First Frame: 10 14 01 02 03 04 05 06
+err = p.WriteTPFirstFrame(0x7C6, false, []byte{1, 2, 3, 4, 5, 6}, 20)
+
+// Flow Control/CTS: 30 08 05
+err = p.WriteTPFlowControlFrame(
+	0x7C6, false, tp_layer.FlowStatusContinueToSend, 8, 0x05,
+)
+
+// Consecutive Frame/SN=1: 21 07 08 09
+err = p.WriteTPConsecutiveFrame(0x7C6, false, []byte{7, 8, 9}, 1)
+```
+
+如果只需要编码、不立即发送，可以直接调用公开的
+`tp_layer.CreateSingleFrame`、`CreateFirstFrame`、`CreateFlowControlFrame` 和
+`CreateConsecutiveFrame`。这些编码接口不会自动填充字节；需要特殊填充或构造
+非标准测试帧时，可以修改返回的 `[]byte` 后再调用 `Preset.Write`。流控接口的
+`stMin` 使用 ISO-TP 原始编码，例如 `0x05` 表示 5 ms，`0xF5` 表示 500 μs。
+
+手动 `WriteTP*` 接口的 8 字节填充默认关闭。可以在构造时开启，默认使用
+`0xAA` 填充：
+
+```go
+p, err := preset.NewPresetToomoss(
+	0x7C6, 0x7C7, 0x7DF,
+	driver.CHANNEL1, driver.CANFD,
+	preset.WithTPPadding(true),
+)
+```
+
+也可以在运行时切换或修改填充值：
+
+```go
+p.SetTPPadding(true)       // 短于 8 字节时补到 8 字节
+p.SetTPPaddingByte(0x00)   // 后续改用 0x00 填充
+enabled, value := p.TPPadding()
+p.SetTPPadding(false)      // 恢复不填充
+```
+
+该开关只补齐短于 8 字节的帧；已经达到 8 字节或更长的 CAN FD 帧保持不变。
+直接调用 `tp_layer.Create*` 时仍然返回未填充的编码结果。
+
+完整的新增接口、参数约束和手动首帧/流控/连续帧流程见
+[`docs/preset_tp_api.md`](docs/preset_tp_api.md)。
+
 对 TSMaster 而言，`cfg.Channel` 表示物理硬件通道。默认会把应用逻辑通道 CAN1 映射到设备索引 0 的该物理通道。例如只连接一个设备但使用物理 CAN4：
 
 ```go

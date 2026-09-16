@@ -12,11 +12,12 @@ func NewPresetToomossWithCANFDConfig(
 	physId, respId, funcId uint32,
 	channel byte,
 	canType driver.CanType,
-	cfg driver.CANFDInitConfig) (*Preset, error) {
+	cfg driver.CANFDInitConfig,
+	options ...Option) (*Preset, error) {
 	if err := cfg.ValidateWithBRP(); err != nil {
 		return nil, fmt.Errorf("invalid CAN FD config: %w", err)
 	}
 	drv := driver.NewToomoss(canType, channel)
 	drv.SetCANFDTiming(cfg)
-	return newPreset(drv, physId, respId, funcId)
+	return newPreset(drv, physId, respId, funcId, options...)
 }
