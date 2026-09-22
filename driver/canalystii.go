@@ -305,8 +305,9 @@ func (c *CanalystII) readLoop() {
 				unifiedMsg.ID = msg.ID
 				unifiedMsg.DLC = msg.DataLen
 				unifiedMsg.IsFD = false
+				unifiedMsg.TimestampUS = canalystTimestampUS(msg.TimeStamp, msg.TimeFlag)
 				copy(unifiedMsg.Data[:], msg.Data[:msg.DataLen])
-				logCANMessage("RX", unifiedMsg.ID, unifiedMsg.DLC, unifiedMsg.Data[:msg.DataLen], CAN)
+				logCANMessage("RX", unifiedMsg.ID, unifiedMsg.DLC, unifiedMsg.Data[:msg.DataLen], CAN, unifiedMsg.TimestampUS)
 				c.publishRx(c.ctx, c.rxChan, unifiedMsg)
 			}
 		}
@@ -368,9 +369,17 @@ func (c *CanalystII) Write(id int32, fd bool, data []byte) error {
 	if ret != 1 {
 		return fmt.Errorf("VCI_Transmit failed: sent %d of 1", ret)
 	}
-	logCANMessage("TX", msg.ID, msg.DataLen, msg.Data[:msg.DataLen], CAN)
+	logCANMessage("TX", msg.ID, msg.DataLen, msg.Data[:msg.DataLen], CAN, 0)
 	c.recordBusTx(id, false, false, data)
 	return nil
+}
+
+func canalystTimestampUS(timestamp uint32, timeFlag uint8) uint64 {
+	if timeFlag == 0 {
+		return 0
+	}
+	// ControlCAN reports VCI_CAN_OBJ.TimeStamp in 0.1 ms ticks.
+	return uint64(timestamp) * 100
 }
 
 func (c *CanalystII) RxChan() <-chan CanFrame {

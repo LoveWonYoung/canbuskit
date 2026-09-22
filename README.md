@@ -10,7 +10,7 @@
 
 当前硬件驱动统一支持标准 11 位 ID 的 CAN / CAN FD 数据帧；29 位扩展帧不在驱动层支持范围内。
 
-接收帧的 `driver.CanFrame.TimestampUS` 保存硬件/驱动提供的单调时间戳，并统一为微秒；值为 0 表示该后端未提供硬件时间戳。Toomoss、TSMaster、PCAN 和 Vector 支持该字段，CanalystII 暂不处理。
+`driver.CanFrame.TimestampUS` 保存硬件/驱动提供的单调时间戳，并统一为微秒；值为 0 表示该帧没有可用的硬件时间戳。Toomoss、TSMaster、PCAN、Vector 和 CanalystII 均支持接收帧时间戳。启用帧日志后，时间戳会按 `s ms us` 三段显示，例如 `Timestamp=1s 234ms 567us`。PCAN、TSMaster 和 Vector 的 TX 日志来自设备发送确认，因此也会打印真实的硬件时间戳；Toomoss 和 CanalystII 的主动发送日志时间戳为 0。
 
 ## 模块结构
 
@@ -223,7 +223,7 @@ mapping := driver.TSMasterMapping{
 tsmaster := driver.NewTSMasterWithMapping(cfg, driver.TC1016, mapping)
 ```
 
-`IncludeTxEcho` 默认为 `false`。抓包程序如果需要同时观察发送帧，可以显式开启；UDS 客户端始终只处理 RX 帧。
+`IncludeTxEcho` 默认为 `false`。抓包程序如果需要通过 `RxChan` 同时观察发送帧，可以显式开启；该选项不影响 PCAN、TSMaster 和 Vector 的 TX 硬件时间戳日志，UDS 客户端始终只处理 RX 帧。
 
 `AutoDriver` 会按默认顺序探测设备，清理初始化失败或模式不匹配的候选。也可以通过 `AutoCandidate` 传入自定义顺序和设备构造参数。
 

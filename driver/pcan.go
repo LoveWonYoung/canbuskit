@@ -20,15 +20,17 @@ import (
 )
 
 const (
-	pcanDLLName        = "PCANBasic.dll"
-	pcanDefaultChannel = 0
-	pcanUSBBaseLow     = 0x51
-	pcanUSBBaseHigh    = 0x500
-	pcanBaud500K       = 0x001C
-	pcanTypeISA        = 0x01
-	pcanIOPort         = 0x02A0
-	pcanInterrupt      = 11
-	pcanLangEnglish    = 0x09
+	pcanDLLName         = "PCANBasic.dll"
+	pcanDefaultChannel  = 0
+	pcanUSBBaseLow      = 0x51
+	pcanUSBBaseHigh     = 0x500
+	pcanBaud500K        = 0x001C
+	pcanTypeISA         = 0x01
+	pcanIOPort          = 0x02A0
+	pcanInterrupt       = 11
+	pcanLangEnglish     = 0x09
+	pcanAllowEchoFrames = 0x2C
+	pcanParameterOn     = 0x01
 	// 500k nominal / 2M data with 80 MHz clock.
 	pcanFDDefaultBitrate = "f_clock_mhz=80,nom_brp=20,nom_tseg1=5,nom_tseg2=2,nom_sjw=1,data_brp=4,data_tseg1=7,data_tseg2=2,data_sjw=1"
 )
@@ -95,6 +97,7 @@ type PCAN struct {
 	readFDProc       *syscall.LazyProc
 	writeProc        *syscall.LazyProc
 	writeFDProc      *syscall.LazyProc
+	setValueProc     *syscall.LazyProc
 	getErrorTextProc *syscall.LazyProc
 }
 
@@ -184,6 +187,9 @@ func (p *PCAN) Init() error {
 	if initErr != nil {
 		return cleanup(initErr)
 	}
+	if err := p.enableEchoFrames(); err != nil {
+		log.Printf("PCAN echo frames unavailable; TX hardware timestamps will not be logged: %v", err)
+	}
 	p.lifecycle.markInitialized()
 	return nil
 }
@@ -252,7 +258,6 @@ func (p *PCAN) Write(id int32, fd bool, data []byte) error {
 		if status != pcanErrorOK {
 			return fmt.Errorf("pcan write fd failed: %s", p.formatStatus(status))
 		}
-		logCANMessage("TX", msg.ID, msg.DLC, msg.Data[:dlcToLen(msg.DLC)], CANFD)
 		p.recordBusTx(id, true, p.cfg.BRS, data)
 		return nil
 	}
@@ -268,7 +273,6 @@ func (p *PCAN) Write(id int32, fd bool, data []byte) error {
 		if status != pcanErrorOK {
 			return fmt.Errorf("pcan write failed: %s", p.formatStatus(status))
 		}
-		logCANMessage("TX", msg.ID, msg.DLC, msg.Data[:len(data)], CAN)
 		p.recordBusTx(id, false, false, data)
 		return nil
 	case CAN:
@@ -281,7 +285,6 @@ func (p *PCAN) Write(id int32, fd bool, data []byte) error {
 		if status != pcanErrorOK {
 			return fmt.Errorf("pcan write failed: %s", p.formatStatus(status))
 		}
-		logCANMessage("TX", msg.ID, msg.Len, msg.Data[:msg.Len], CAN)
 		p.recordBusTx(id, false, false, data)
 		return nil
 	default:
@@ -443,6 +446,7 @@ func (p *PCAN) loadDLL() error {
 		p.readFDProc = dll.NewProc("CAN_ReadFD")
 		p.writeProc = dll.NewProc("CAN_Write")
 		p.writeFDProc = dll.NewProc("CAN_WriteFD")
+		p.setValueProc = dll.NewProc("CAN_SetValue")
 		p.getErrorTextProc = dll.NewProc("CAN_GetErrorText")
 		return nil
 	}
@@ -556,15 +560,38 @@ func (p *PCAN) enqueueMessage(id uint32, dlc byte, data []byte, msgType uint8, t
 	unified.BRS = isFD && msgType&pcanMessageBRS != 0
 	unified.TimestampUS = timestampUS
 	copy(unified.Data[:], data)
+	payloadLen := dlcToLen(dlc)
+	direction := "RX"
+	if unified.Direction == TX {
+		direction = "TX"
+	}
+	logCANMessage(direction, unified.ID, unified.DLC, unified.Data[:payloadLen], msgTypeLabel, unified.TimestampUS)
 	if unified.Direction == TX && !p.cfg.IncludeTxEcho {
 		p.observeBusFrame(unified)
 		return
 	}
 
-	payloadLen := dlcToLen(dlc)
-	logCANMessage("RX", unified.ID, unified.DLC, unified.Data[:payloadLen], msgTypeLabel)
-
 	p.publishRx(p.ctx, p.rxChan, unified)
+}
+
+func (p *PCAN) enableEchoFrames() error {
+	if p.setValueProc == nil {
+		return errors.New("CAN_SetValue is not available")
+	}
+	if err := p.setValueProc.Find(); err != nil {
+		return fmt.Errorf("CAN_SetValue is not available: %w", err)
+	}
+	value := uint32(pcanParameterOn)
+	status, _, _ := p.setValueProc.Call(
+		uintptr(p.handle),
+		uintptr(pcanAllowEchoFrames),
+		uintptr(unsafe.Pointer(&value)),
+		unsafe.Sizeof(value),
+	)
+	if status != pcanErrorOK {
+		return fmt.Errorf("CAN_SetValue(PCAN_ALLOW_ECHO_FRAMES) failed: %s", p.formatStatus(uint32(status)))
+	}
+	return nil
 }
 
 func (p *PCAN) callRead(msg *pcanMsg, ts *pcanTimestamp) uint32 {

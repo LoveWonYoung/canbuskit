@@ -65,7 +65,7 @@ func dlcToLen(dlc byte) int {
 }
 
 // logCANMessage 统一的CAN消息日志记录函数
-func logCANMessage(direction string, id uint32, dlc byte, data []byte, canType CanType) {
+func logCANMessage(direction string, id uint32, dlc byte, data []byte, canType CanType, timestampUS uint64) {
 	if !printLogEnabled() {
 		return
 	}
@@ -76,8 +76,11 @@ func logCANMessage(direction string, id uint32, dlc byte, data []byte, canType C
 	if canType == CAN {
 		typeStr = "CAN  "
 	}
-	format := "%s %s: ID=0x%03X, DLC=%02d, Data=% 02X"
-	log.Printf(format, direction, typeStr, id, dlc, data)
+	seconds := timestampUS / 1_000_000
+	milliseconds := timestampUS / 1_000 % 1_000
+	microseconds := timestampUS % 1_000
+	format := "%s %s: Timestamp=%ds %03dms %03dus, ID=0x%03X, DLC=%02d, Data=% 02X"
+	log.Printf(format, direction, typeStr, seconds, milliseconds, microseconds, id, dlc, data)
 }
 
 // CanFrame 是一个通用的CAN/CAN-FD消息结构体，用于在channel中传递,它屏蔽了底层 CAN_MSG 和 CANFD_MSG 的差异。

@@ -563,15 +563,11 @@ func (t *TSMaster) readLoop() {
 			return
 		case <-ticker.C:
 			var size = int32(MsgBufferSize)
-			rxTxMode := uintptr(0)
-			if t.cfg.IncludeTxEcho {
-				rxTxMode = 1
-			}
 			if r, _, _ := t.loader.GetProcAddress("tsfifo_receive_canfd_msgs").Call(
 				uintptr(unsafe.Pointer(&canfdMsg[0])),
 				uintptr(unsafe.Pointer(&size)),
 				uintptr(t.mapping.ApplicationChannel),
-				rxTxMode,
+				uintptr(1), // Include TX confirmations so logs use hardware timestamps.
 			); r != 0 {
 				continue
 			}
@@ -593,7 +589,6 @@ func (t *TSMaster) readLoop() {
 					continue
 				}
 
-				var unifiedMsg CanFrame
 				// 使用统一的日志函数
 				msgType := t.canType
 				if msg.FFDProperties&1 == 0 {
@@ -601,24 +596,20 @@ func (t *TSMaster) readLoop() {
 				} else {
 					msgType = CANFD
 				}
-				switch canfdMsg[i].FProperties & tsCANPropertyTX {
-				case 0:
-					unifiedMsg = CanFrame{
-						Direction: RX, ID: uint32(msg.FIdentifier), DLC: msg.FDLC, Data: msg.FData, IsFD: msg.FFDProperties&tsCANFDPropertyEDL != 0, BRS: msg.FFDProperties&tsCANFDPropertyBRS != 0,
-						TimestampUS: tsmasterTimestampUS(msg.FTimeUs),
-					}
-
-					logCANMessage("RX", unifiedMsg.ID, unifiedMsg.DLC, unifiedMsg.Data[:dlcToLen(unifiedMsg.DLC)], msgType)
-				case 1:
-					unifiedMsg = CanFrame{
-						Direction: TX, ID: uint32(msg.FIdentifier), DLC: msg.FDLC, Data: msg.FData, IsFD: msg.FFDProperties&tsCANFDPropertyEDL != 0, BRS: msg.FFDProperties&tsCANFDPropertyBRS != 0,
-						TimestampUS: tsmasterTimestampUS(msg.FTimeUs),
-					}
-					if !t.cfg.IncludeTxEcho {
-						t.observeBusFrame(unifiedMsg)
-						continue
-					}
-					logCANMessage("TX", unifiedMsg.ID, unifiedMsg.DLC, unifiedMsg.Data[:dlcToLen(unifiedMsg.DLC)], msgType)
+				direction := RX
+				directionLabel := "RX"
+				if msg.FProperties&tsCANPropertyTX != 0 {
+					direction = TX
+					directionLabel = "TX"
+				}
+				unifiedMsg := CanFrame{
+					Direction: direction, ID: uint32(msg.FIdentifier), DLC: msg.FDLC, Data: msg.FData, IsFD: msg.FFDProperties&tsCANFDPropertyEDL != 0, BRS: msg.FFDProperties&tsCANFDPropertyBRS != 0,
+					TimestampUS: tsmasterTimestampUS(msg.FTimeUs),
+				}
+				logCANMessage(directionLabel, unifiedMsg.ID, unifiedMsg.DLC, unifiedMsg.Data[:dlcToLen(unifiedMsg.DLC)], msgType, unifiedMsg.TimestampUS)
+				if direction == TX && !t.cfg.IncludeTxEcho {
+					t.observeBusFrame(unifiedMsg)
+					continue
 				}
 
 				t.publishRx(t.ctx, t.rxChan, unifiedMsg)

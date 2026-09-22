@@ -35,17 +35,18 @@ const (
 
 	vectorDefaultRxQueueSize = 16384
 
-	vectorBusTypeCAN           = 1
-	vectorInterfaceVersion     = 3
-	vectorInterfaceVersionV4   = 4
-	vectorOutputModeNormal     = 1
-	vectorInvalidPortHandle    = -1
-	vectorStatusSuccess        = 0
-	vectorStatusQueueIsEmpty   = 10
-	vectorEventTagReceiveMsg   = 1
-	vectorEventTagTransmitMsg  = 10
-	vectorCanMsgFlagErrorFrame = 1
-	vectorCanMsgFlagRemote     = 0x10
+	vectorBusTypeCAN            = 1
+	vectorInterfaceVersion      = 3
+	vectorInterfaceVersionV4    = 4
+	vectorOutputModeNormal      = 1
+	vectorInvalidPortHandle     = -1
+	vectorStatusSuccess         = 0
+	vectorStatusQueueIsEmpty    = 10
+	vectorEventTagReceiveMsg    = 1
+	vectorEventTagTransmitMsg   = 10
+	vectorCanMsgFlagErrorFrame  = 1
+	vectorCanMsgFlagRemote      = 0x10
+	vectorCanMsgFlagTXCompleted = 0x40
 
 	vectorCanFdTagRxOK = 1024
 	vectorCanFdTagTxOK = 1028
@@ -381,7 +382,6 @@ func (v *Vector) Write(id int32, fd bool, data []byte) error {
 		if msgSent != 1 {
 			return fmt.Errorf("xlCanTransmitEx sent %d of 1 messages", msgSent)
 		}
-		logCANMessage("TX", uint32(id), txEvent.TagData.CanMsg.DLC, txEvent.TagData.CanMsg.Data[:dlcToLen(txEvent.TagData.CanMsg.DLC)], CANFD)
 		v.recordBusTx(id, true, v.cfg.BRS, data)
 		return nil
 	}
@@ -411,7 +411,6 @@ func (v *Vector) Write(id int32, fd bool, data []byte) error {
 		if msgSent != 1 {
 			return fmt.Errorf("xlCanTransmitEx sent %d of 1 messages", msgSent)
 		}
-		logCANMessage("TX", uint32(id), txEvent.TagData.CanMsg.DLC, txEvent.TagData.CanMsg.Data[:len(data)], CAN)
 		v.recordBusTx(id, false, false, data)
 		return nil
 	case CAN:
@@ -431,8 +430,6 @@ func (v *Vector) Write(id int32, fd bool, data []byte) error {
 		if int32(status) != vectorStatusSuccess {
 			return fmt.Errorf("xlCanTransmit failed: %s", v.errorString(int16(status)))
 		}
-		payloadLen := int(event.TagData.Msg.DLC)
-		logCANMessage("TX", uint32(id), byte(event.TagData.Msg.DLC), event.TagData.Msg.Data[:payloadLen], CAN)
 		v.recordBusTx(id, false, false, data)
 		return nil
 	default:
@@ -672,7 +669,7 @@ func (v *Vector) configureChannel() error {
 		return fmt.Errorf("xlCanSetChannelOutput failed: %w", err)
 	}
 
-	if err := v.callStatus(v.canSetChannelModeProc, uintptr(v.portHandle), uintptr(channelMask), uintptr(0), uintptr(0)); err != nil {
+	if err := v.callStatus(v.canSetChannelModeProc, uintptr(v.portHandle), uintptr(channelMask), uintptr(1), uintptr(0)); err != nil {
 		return fmt.Errorf("xlCanSetChannelMode failed: %w", err)
 	}
 
@@ -748,16 +745,20 @@ func (v *Vector) readOneCanFD() bool {
 	unified.BRS = unified.IsFD && msg.MsgFlags&vectorCanFdRxFlagBRS != 0
 	unified.TimestampUS = event.TimeStamp / 1_000
 	copy(unified.Data[:], msg.Data[:payloadLen])
-	if unified.Direction == TX && !v.cfg.IncludeTxEcho {
-		v.observeBusFrame(unified)
-		return true
-	}
 
 	msgType := CAN
 	if unified.IsFD {
 		msgType = CANFD
 	}
-	logCANMessage("RX", unified.ID, unified.DLC, unified.Data[:payloadLen], msgType)
+	direction := "RX"
+	if unified.Direction == TX {
+		direction = "TX"
+	}
+	logCANMessage(direction, unified.ID, unified.DLC, unified.Data[:payloadLen], msgType, unified.TimestampUS)
+	if unified.Direction == TX && !v.cfg.IncludeTxEcho {
+		v.observeBusFrame(unified)
+		return true
+	}
 
 	v.publishRx(v.ctx, v.rxChan, unified)
 
@@ -800,13 +801,24 @@ func (v *Vector) readOneCAN() bool {
 
 	var unified CanFrame
 	unified.Direction = RX
+	if event.TagData.Msg.Flags&vectorCanMsgFlagTXCompleted != 0 {
+		unified.Direction = TX
+	}
 	unified.ID = event.TagData.Msg.ID & 0x1FFFFFFF
 	unified.DLC = dlc
 	unified.IsFD = false
 	unified.TimestampUS = event.TimeStamp / 1_000
 	copy(unified.Data[:], event.TagData.Msg.Data[:payloadLen])
 
-	logCANMessage("RX", unified.ID, unified.DLC, unified.Data[:payloadLen], CAN)
+	direction := "RX"
+	if unified.Direction == TX {
+		direction = "TX"
+	}
+	logCANMessage(direction, unified.ID, unified.DLC, unified.Data[:payloadLen], CAN, unified.TimestampUS)
+	if unified.Direction == TX && !v.cfg.IncludeTxEcho {
+		v.observeBusFrame(unified)
+		return true
+	}
 
 	v.publishRx(v.ctx, v.rxChan, unified)
 

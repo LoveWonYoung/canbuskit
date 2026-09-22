@@ -827,7 +827,7 @@ func (c *Toomoss) readLoop() {
 				} else {
 					msgType = CANFD
 				}
-				logCANMessage("RX", unifiedMsg.ID, unifiedMsg.DLC, unifiedMsg.Data[:actualLen], msgType)
+				logCANMessage("RX", unifiedMsg.ID, unifiedMsg.DLC, unifiedMsg.Data[:actualLen], msgType, unifiedMsg.TimestampUS)
 				c.publishRx(c.ctx, c.rxChan, unifiedMsg)
 			}
 		}
@@ -880,7 +880,7 @@ func (c *Toomoss) readClassicBurst(canMsg *[MsgBufferSize]C.CAN_MSG) {
 			TimestampUS: toomossTimestampUS(byte(msg.TimeStampHigh), uint32(msg.TimeStamp), 100),
 		}
 
-		logCANMessage("RX", unifiedMsg.ID, unifiedMsg.DLC, unifiedMsg.Data[:actualLen], CAN)
+		logCANMessage("RX", unifiedMsg.ID, unifiedMsg.DLC, unifiedMsg.Data[:actualLen], CAN, unifiedMsg.TimestampUS)
 		if skipPublish {
 			c.observeBusFrame(unifiedMsg)
 			continue
@@ -975,7 +975,7 @@ func (c *Toomoss) Write(id int32, fd bool, data []byte) error {
 			BRS:       byte(msg.Flags)&CANFD_MSG_FLAG_BRS != 0,
 		}
 
-		logCANMessage("TX", uint32(id), unifiedMsg.DLC, payload[:len(data)], logType)
+		logCANMessage("TX", uint32(id), unifiedMsg.DLC, payload[:len(data)], logType, 0)
 		c.recordBusTx(id, fd, fd && c.cfg.BRS, data)
 		if c.cfg.IncludeTxEcho {
 			c.publishRx(c.ctx, c.rxChan, unifiedMsg)
@@ -1029,7 +1029,7 @@ func (c *Toomoss) writeClassicCAN(id int32, fd bool, data []byte) error {
 		Data:      unifiedData,
 		IsFD:      false,
 	}
-	logCANMessage("TX", canID, unifiedMsg.DLC, data, CAN)
+	logCANMessage("TX", canID, unifiedMsg.DLC, data, CAN, 0)
 	c.recordBusTx(id, false, false, data)
 	if c.cfg.IncludeTxEcho {
 		c.publishRx(c.ctx, c.rxChan, unifiedMsg)
