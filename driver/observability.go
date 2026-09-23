@@ -114,9 +114,10 @@ func (t *driverTelemetry) close() {
 // driverObservability centralizes telemetry shared by all hardware backends.
 // Its zero value is ready for use.
 type driverObservability struct {
-	mu        sync.RWMutex
-	telemetry *driverTelemetry
-	busLoad   busLoadMeter
+	mu               sync.RWMutex
+	telemetry        *driverTelemetry
+	busLoad          busLoadMeter
+	relativeLogClock relativeLogClock
 }
 
 func (o *driverObservability) resetTelemetry() *driverTelemetry {
@@ -137,7 +138,12 @@ func (o *driverObservability) resetTelemetry() *driverTelemetry {
 func (o *driverObservability) resetTelemetryWith(cfg Config) *driverTelemetry {
 	t := o.resetTelemetry()
 	o.busLoad.configure(cfg)
+	o.relativeLogClock.reset()
 	return t
+}
+
+func (o *driverObservability) relativeLogTimes(timestampUS, wrapPeriodUS uint64) (elapsedUS, deltaUS uint64) {
+	return o.relativeLogClock.observe(timestampUS, wrapPeriodUS)
 }
 
 func (o *driverObservability) currentTelemetry() *driverTelemetry {

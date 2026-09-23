@@ -26,7 +26,7 @@ func TestTSMasterTimestampUS(t *testing.T) {
 	}
 }
 
-func TestPCANEchoLogUsesTXHardwareTimestamp(t *testing.T) {
+func TestPCANEchoLogUsesRelativeHardwareTimes(t *testing.T) {
 	originalOutput := log.Writer()
 	var output bytes.Buffer
 	log.SetOutput(&output)
@@ -39,12 +39,43 @@ func TestPCANEchoLogUsesTXHardwareTimestamp(t *testing.T) {
 
 	driver := &PCAN{cfg: Config{IncludeTxEcho: false}}
 	driver.enqueueMessage(0x123, 1, []byte{0xAA}, pcanMessageEcho, 1_002_003)
+	driver.enqueueMessage(0x123, 1, []byte{0xBB}, pcanMessageEcho, 1_003_507)
 
 	got := output.String()
 	if !strings.Contains(got, "TX CAN") {
 		t.Fatalf("PCAN echo was not logged as TX: %q", got)
 	}
-	if !strings.Contains(got, "Timestamp=1s 002ms 003us") {
-		t.Fatalf("PCAN TX hardware timestamp was not logged: %q", got)
+	if !strings.Contains(got, "Elapsed=0s 000ms 000us, Delta=0s 000ms 000us") {
+		t.Fatalf("PCAN first TX echo did not establish the relative origin: %q", got)
+	}
+	if !strings.Contains(got, "Elapsed=0s 001ms 504us, Delta=0s 001ms 504us") {
+		t.Fatalf("PCAN TX echo relative times were not logged: %q", got)
+	}
+}
+
+func TestPCANRelativeTimesIncludeFilteredFrames(t *testing.T) {
+	originalOutput := log.Writer()
+	var output bytes.Buffer
+	log.SetOutput(&output)
+	SetPrintLog(true)
+	if err := SetLogFilter(LogFilterList, []uint32{0x123}); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() {
+		SetPrintLog(false)
+		_ = SetLogFilter(LogFilterOff, nil)
+		log.SetOutput(originalOutput)
+	})
+
+	driver := &PCAN{}
+	driver.enqueueMessage(0x321, 1, []byte{0xAA}, pcanMessageEcho, 10_000)
+	driver.enqueueMessage(0x123, 1, []byte{0xBB}, pcanMessageEcho, 10_250)
+
+	got := output.String()
+	if strings.Contains(got, "ID=0x321") {
+		t.Fatalf("filtered frame was logged: %q", got)
+	}
+	if !strings.Contains(got, "Elapsed=0s 000ms 250us, Delta=0s 000ms 250us") {
+		t.Fatalf("filtered frame was not included in relative timing: %q", got)
 	}
 }

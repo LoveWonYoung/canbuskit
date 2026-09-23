@@ -231,11 +231,16 @@ tsmaster := driver.NewTSMasterWithMapping(cfg, driver.TC1016, mapping)
 driver.SetPrintLog(true)
 ```
 
-RX 和具备发送回显能力的 TX 都在设备接收路径统一打印。硬件时间戳会转换为微秒，并按 `s ms us` 三段显示：
+除 CanalystII 外，RX 和具备发送回显能力的 TX 都在设备接收路径统一打印。日志使用设备硬件时间戳计算两个相对时间，并按 `s ms us` 三段显示：
+
+- `Elapsed`：从当前驱动实例收到第一帧有效数据帧开始累计，第一帧为 `0`。
+- `Delta`：当前帧与上一帧有效数据帧的硬件时间差，滑动步长为 1，第一帧为 `0`。
+
+相对时间在日志 ID 过滤之前更新，因此 `Delta` 表示设备实际接收的相邻有效帧间隔，而不只是两条可见日志之间的间隔。`CanFrame.TimestampUS` 仍保留厂商提供的原始硬件时间戳，不受日志归零影响。
 
 ```text
-RX CAN  : Timestamp=1s 234ms 567us, ID=0x123, DLC=08, Data=01 02 03 04 05 06 07 08
-TX CANFD: Timestamp=1s 235ms 012us, ID=0x456, DLC=15, Data=...
+RX CAN  : Elapsed=0s 000ms 000us, Delta=0s 000ms 000us, ID=0x123, DLC=08, Data=01 02 03 04 05 06 07 08
+TX CANFD: Elapsed=0s 000ms 445us, Delta=0s 000ms 445us, ID=0x456, DLC=15, Data=...
 ```
 
 各驱动的 TX 时间戳行为如下：
@@ -243,7 +248,7 @@ TX CANFD: Timestamp=1s 235ms 012us, ID=0x456, DLC=15, Data=...
 - PCAN、TSMaster 和 Vector：TX 日志来自设备发送确认，使用设备返回的硬件时间戳。
 - Toomoss CAN FD 模式：根据 `CANFD_MSG.Flags` 的 bit7 判断 TX，时间戳单位为 10 μs；在 CAN FD 模式下发送普通 CAN 帧同样可以正确取得 TX 硬件时间戳。
 - Toomoss 标准 CAN 模式：根据 `CAN_MSG.RemoteFlag` 的 bit7 判断 TX，时间戳单位为 100 μs。当前实测的 Toomoss 标准 CAN 接口存在厂商问题，`CAN_SendMsgWithTime` 返回的发送帧没有设置 bit7，因此该帧会按 RX 显示。驱动不会根据 ID 和数据内容推测 TX，以免把其他节点发送的相同报文误判为 TX。
-- CanalystII：主动发送路径没有设备发送确认，TX 时间戳为 `0`。
+- CanalystII：不参与相对时间计算，保持原有的 `Timestamp` 日志格式。其主动发送路径没有设备发送确认，TX 时间戳为 `0`；RX 继续显示设备返回的原始硬件时间戳。
 
 `IncludeTxEcho` 默认为 `false`。它只控制 TX 回显是否进入 `RxChan`，不影响 TX 日志。抓包程序需要同时消费 RX 和 TX 时可以显式开启；UDS 客户端始终只处理 RX 帧。
 

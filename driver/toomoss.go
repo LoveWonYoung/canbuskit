@@ -928,7 +928,8 @@ func (t *Toomoss) readLoop() {
 				if isFD {
 					msgType = CANFD
 				}
-				logCANMessage(directionLabel, unifiedMsg.ID, unifiedMsg.DLC, unifiedMsg.Data[:actualLen], msgType, unifiedMsg.TimestampUS)
+				elapsedUS, deltaUS := t.relativeLogTimes(unifiedMsg.TimestampUS, toomossTimestampWrapUS(10))
+				logCANMessageRelative(directionLabel, unifiedMsg.ID, unifiedMsg.DLC, unifiedMsg.Data[:actualLen], msgType, elapsedUS, deltaUS)
 				if txEcho && !t.cfg.IncludeTxEcho {
 					t.observeBusFrame(unifiedMsg)
 					continue
@@ -998,7 +999,8 @@ func (t *Toomoss) readClassicBurst(canMsg *[MsgBufferSize]CAN_MSG) {
 			TimestampUS: toomossTimestampUS(msg.TimeStampHigh, msg.TimeStamp, 100),
 		}
 
-		logCANMessage(directionLabel, unifiedMsg.ID, unifiedMsg.DLC, unifiedMsg.Data[:actualLen], CAN, unifiedMsg.TimestampUS)
+		elapsedUS, deltaUS := t.relativeLogTimes(unifiedMsg.TimestampUS, toomossTimestampWrapUS(100))
+		logCANMessageRelative(directionLabel, unifiedMsg.ID, unifiedMsg.DLC, unifiedMsg.Data[:actualLen], CAN, elapsedUS, deltaUS)
 		if txEcho && !t.cfg.IncludeTxEcho {
 			t.observeBusFrame(unifiedMsg)
 			continue

@@ -606,7 +606,8 @@ func (t *TSMaster) readLoop() {
 					Direction: direction, ID: uint32(msg.FIdentifier), DLC: msg.FDLC, Data: msg.FData, IsFD: msg.FFDProperties&tsCANFDPropertyEDL != 0, BRS: msg.FFDProperties&tsCANFDPropertyBRS != 0,
 					TimestampUS: tsmasterTimestampUS(msg.FTimeUs),
 				}
-				logCANMessage(directionLabel, unifiedMsg.ID, unifiedMsg.DLC, unifiedMsg.Data[:dlcToLen(unifiedMsg.DLC)], msgType, unifiedMsg.TimestampUS)
+				elapsedUS, deltaUS := t.relativeLogTimes(unifiedMsg.TimestampUS, 0)
+				logCANMessageRelative(directionLabel, unifiedMsg.ID, unifiedMsg.DLC, unifiedMsg.Data[:dlcToLen(unifiedMsg.DLC)], msgType, elapsedUS, deltaUS)
 				if direction == TX && !t.cfg.IncludeTxEcho {
 					t.observeBusFrame(unifiedMsg)
 					continue

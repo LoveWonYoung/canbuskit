@@ -754,7 +754,8 @@ func (v *Vector) readOneCanFD() bool {
 	if unified.Direction == TX {
 		direction = "TX"
 	}
-	logCANMessage(direction, unified.ID, unified.DLC, unified.Data[:payloadLen], msgType, unified.TimestampUS)
+	elapsedUS, deltaUS := v.relativeLogTimes(unified.TimestampUS, 0)
+	logCANMessageRelative(direction, unified.ID, unified.DLC, unified.Data[:payloadLen], msgType, elapsedUS, deltaUS)
 	if unified.Direction == TX && !v.cfg.IncludeTxEcho {
 		v.observeBusFrame(unified)
 		return true
@@ -814,7 +815,8 @@ func (v *Vector) readOneCAN() bool {
 	if unified.Direction == TX {
 		direction = "TX"
 	}
-	logCANMessage(direction, unified.ID, unified.DLC, unified.Data[:payloadLen], CAN, unified.TimestampUS)
+	elapsedUS, deltaUS := v.relativeLogTimes(unified.TimestampUS, 0)
+	logCANMessageRelative(direction, unified.ID, unified.DLC, unified.Data[:payloadLen], CAN, elapsedUS, deltaUS)
 	if unified.Direction == TX && !v.cfg.IncludeTxEcho {
 		v.observeBusFrame(unified)
 		return true

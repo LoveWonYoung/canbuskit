@@ -83,6 +83,33 @@ func logCANMessage(direction string, id uint32, dlc byte, data []byte, canType C
 	log.Printf(format, direction, typeStr, seconds, milliseconds, microseconds, id, dlc, data)
 }
 
+// logCANMessageRelative records time since the first hardware frame and time
+// since the preceding hardware frame. CanalystII intentionally continues to
+// use logCANMessage because its transmit path has no hardware confirmation.
+func logCANMessageRelative(direction string, id uint32, dlc byte, data []byte, canType CanType, elapsedUS, deltaUS uint64) {
+	if !printLogEnabled() {
+		return
+	}
+	if filter := logFilter.Load(); filter != nil && !filter.allows(id) {
+		return
+	}
+	typeStr := "CANFD"
+	if canType == CAN {
+		typeStr = "CAN  "
+	}
+	elapsedSeconds := elapsedUS / 1_000_000
+	elapsedMilliseconds := elapsedUS / 1_000 % 1_000
+	elapsedMicroseconds := elapsedUS % 1_000
+	deltaSeconds := deltaUS / 1_000_000
+	deltaMilliseconds := deltaUS / 1_000 % 1_000
+	deltaMicroseconds := deltaUS % 1_000
+	format := "%s %s: Elapsed=%ds %03dms %03dus, Delta=%ds %03dms %03dus, ID=0x%03X, DLC=%02d, Data=% 02X"
+	log.Printf(format, direction, typeStr,
+		elapsedSeconds, elapsedMilliseconds, elapsedMicroseconds,
+		deltaSeconds, deltaMilliseconds, deltaMicroseconds,
+		id, dlc, data)
+}
+
 // CanFrame 是一个通用的CAN/CAN-FD消息结构体，用于在channel中传递,它屏蔽了底层 CAN_MSG 和 CANFD_MSG 的差异。
 type CanFrame struct {
 	Direction DirectionType

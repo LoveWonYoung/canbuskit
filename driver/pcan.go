@@ -565,7 +565,8 @@ func (p *PCAN) enqueueMessage(id uint32, dlc byte, data []byte, msgType uint8, t
 	if unified.Direction == TX {
 		direction = "TX"
 	}
-	logCANMessage(direction, unified.ID, unified.DLC, unified.Data[:payloadLen], msgTypeLabel, unified.TimestampUS)
+	elapsedUS, deltaUS := p.relativeLogTimes(unified.TimestampUS, 0)
+	logCANMessageRelative(direction, unified.ID, unified.DLC, unified.Data[:payloadLen], msgTypeLabel, elapsedUS, deltaUS)
 	if unified.Direction == TX && !p.cfg.IncludeTxEcho {
 		p.observeBusFrame(unified)
 		return
