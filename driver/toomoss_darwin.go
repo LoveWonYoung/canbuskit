@@ -64,12 +64,12 @@ typedef bool (*fn_USB_CloseDevice)(int DevHandle);
 typedef int (*fn_CAN_Init)(int DevHandle, uint8_t CANIndex, CAN_INIT_CONFIG* pCanConfig);
 typedef int (*fn_CAN_StartGetMsg)(int DevHandle, uint8_t CANIndex);
 typedef int (*fn_CAN_GetMsg)(int DevHandle, uint8_t CANIndex, CAN_MSG* pCanMsg);
-typedef int (*fn_CAN_SendMsg)(int DevHandle, uint8_t CANIndex, CAN_MSG* pCanMsg, uint32_t SendMsgNum);
+typedef int (*fn_CAN_SendMsgWithTime)(int DevHandle, uint8_t CANIndex, CAN_MSG* pCanMsg, uint32_t SendMsgNum);
 typedef int (*fn_CAN_GetCANSpeedArg)(int DevHandle, CAN_INIT_CONFIG* pCanConfig, uint32_t BaudRate);
 typedef int (*fn_CANFD_Init)(int DevHandle, uint8_t CANIndex, CANFD_INIT_CONFIG* pCanConfig);
 typedef int (*fn_CANFD_StartGetMsg)(int DevHandle, uint8_t CANIndex);
 typedef int (*fn_CANFD_GetMsg)(int DevHandle, uint8_t CANIndex, CANFD_MSG* pCanMsg, int MsgBufferSize);
-typedef int (*fn_CANFD_SendMsg)(int DevHandle, uint8_t CANIndex, CANFD_MSG* pCanMsg, uint32_t SendMsgNum);
+typedef int (*fn_CANFD_SendMsgWithTime)(int DevHandle, uint8_t CANIndex, CANFD_MSG* pCanMsg, uint32_t SendMsgNum);
 typedef int (*fn_CANFD_GetCANSpeedArg)(int DevHandle, CANFD_INIT_CONFIG* pCanConfig, uint32_t ABitrate, uint32_t DBitrate);
 
 static void* g_libusb = NULL;
@@ -81,12 +81,12 @@ static fn_USB_CloseDevice pUSB_CloseDevice = NULL;
 static fn_CAN_Init pCAN_Init = NULL;
 static fn_CAN_StartGetMsg pCAN_StartGetMsg = NULL;
 static fn_CAN_GetMsg pCAN_GetMsg = NULL;
-static fn_CAN_SendMsg pCAN_SendMsg = NULL;
+static fn_CAN_SendMsgWithTime pCAN_SendMsgWithTime = NULL;
 static fn_CAN_GetCANSpeedArg pCAN_GetCANSpeedArg = NULL;
 static fn_CANFD_Init pCANFD_Init = NULL;
 static fn_CANFD_StartGetMsg pCANFD_StartGetMsg = NULL;
 static fn_CANFD_GetMsg pCANFD_GetMsg = NULL;
-static fn_CANFD_SendMsg pCANFD_SendMsg = NULL;
+static fn_CANFD_SendMsgWithTime pCANFD_SendMsgWithTime = NULL;
 static fn_CANFD_GetCANSpeedArg pCANFD_GetCANSpeedArg = NULL;
 
 void can_toomoss_unload();
@@ -148,18 +148,18 @@ int can_toomoss_load(const char* libusb_path, const char* usb2xxx_path, char* er
 	LOAD_OPTIONAL_SYMBOL(pCAN_Init, fn_CAN_Init, "CAN_Init");
 	LOAD_OPTIONAL_SYMBOL(pCAN_StartGetMsg, fn_CAN_StartGetMsg, "CAN_StartGetMsg");
 	LOAD_OPTIONAL_SYMBOL(pCAN_GetMsg, fn_CAN_GetMsg, "CAN_GetMsg");
-	LOAD_OPTIONAL_SYMBOL(pCAN_SendMsg, fn_CAN_SendMsg, "CAN_SendMsg");
+	LOAD_OPTIONAL_SYMBOL(pCAN_SendMsgWithTime, fn_CAN_SendMsgWithTime, "CAN_SendMsgWithTime");
 	LOAD_OPTIONAL_SYMBOL(pCAN_GetCANSpeedArg, fn_CAN_GetCANSpeedArg, "CAN_GetCANSpeedArg");
 	LOAD_OPTIONAL_SYMBOL(pCANFD_Init, fn_CANFD_Init, "CANFD_Init");
 	LOAD_OPTIONAL_SYMBOL(pCANFD_StartGetMsg, fn_CANFD_StartGetMsg, "CANFD_StartGetMsg");
 	LOAD_OPTIONAL_SYMBOL(pCANFD_GetMsg, fn_CANFD_GetMsg, "CANFD_GetMsg");
-	LOAD_OPTIONAL_SYMBOL(pCANFD_SendMsg, fn_CANFD_SendMsg, "CANFD_SendMsg");
+	LOAD_OPTIONAL_SYMBOL(pCANFD_SendMsgWithTime, fn_CANFD_SendMsgWithTime, "CANFD_SendMsgWithTime");
 	LOAD_OPTIONAL_SYMBOL(pCANFD_GetCANSpeedArg, fn_CANFD_GetCANSpeedArg, "CANFD_GetCANSpeedArg");
 
 	if (!((pCAN_Init != NULL && pCAN_StartGetMsg != NULL && pCAN_GetMsg != NULL &&
-		   pCAN_SendMsg != NULL && pCAN_GetCANSpeedArg != NULL) ||
+		   pCAN_SendMsgWithTime != NULL && pCAN_GetCANSpeedArg != NULL) ||
 		  (pCANFD_Init != NULL && pCANFD_StartGetMsg != NULL && pCANFD_GetMsg != NULL &&
-		   pCANFD_SendMsg != NULL && pCANFD_GetCANSpeedArg != NULL))) {
+		   pCANFD_SendMsgWithTime != NULL && pCANFD_GetCANSpeedArg != NULL))) {
 		can_toomoss_unload();
 		return write_error(errbuf, errlen, "required Toomoss CAN procedures are not available", NULL);
 	}
@@ -174,12 +174,12 @@ void can_toomoss_unload() {
 	pCAN_Init = NULL;
 	pCAN_StartGetMsg = NULL;
 	pCAN_GetMsg = NULL;
-	pCAN_SendMsg = NULL;
+	pCAN_SendMsgWithTime = NULL;
 	pCAN_GetCANSpeedArg = NULL;
 	pCANFD_Init = NULL;
 	pCANFD_StartGetMsg = NULL;
 	pCANFD_GetMsg = NULL;
-	pCANFD_SendMsg = NULL;
+	pCANFD_SendMsgWithTime = NULL;
 	pCANFD_GetCANSpeedArg = NULL;
 
 	if (g_usb2xxx != NULL) {
@@ -209,12 +209,12 @@ int can_toomoss_usb_close_device(int DevHandle) {
 
 int can_toomoss_has_can() {
 	return pCAN_Init != NULL && pCAN_StartGetMsg != NULL && pCAN_GetMsg != NULL &&
-		pCAN_SendMsg != NULL && pCAN_GetCANSpeedArg != NULL;
+		pCAN_SendMsgWithTime != NULL && pCAN_GetCANSpeedArg != NULL;
 }
 
 int can_toomoss_has_canfd() {
 	return pCANFD_Init != NULL && pCANFD_StartGetMsg != NULL && pCANFD_GetMsg != NULL &&
-		pCANFD_SendMsg != NULL && pCANFD_GetCANSpeedArg != NULL;
+		pCANFD_SendMsgWithTime != NULL && pCANFD_GetCANSpeedArg != NULL;
 }
 
 int can_toomoss_can_init(int DevHandle, uint8_t CANIndex, CAN_INIT_CONFIG* pCanConfig) {
@@ -233,8 +233,8 @@ int can_toomoss_can_get_msg(int DevHandle, uint8_t CANIndex, CAN_MSG* pCanMsg) {
 }
 
 int can_toomoss_can_send_msg(int DevHandle, uint8_t CANIndex, CAN_MSG* pCanMsg, uint32_t SendMsgNum) {
-	if (pCAN_SendMsg == NULL) return -1;
-	return pCAN_SendMsg(DevHandle, CANIndex, pCanMsg, SendMsgNum);
+	if (pCAN_SendMsgWithTime == NULL) return -1;
+	return pCAN_SendMsgWithTime(DevHandle, CANIndex, pCanMsg, SendMsgNum);
 }
 
 int can_toomoss_can_get_speed_arg(int DevHandle, CAN_INIT_CONFIG* pCanConfig, uint32_t BaudRate) {
@@ -258,8 +258,8 @@ int can_toomoss_canfd_get_msg(int DevHandle, uint8_t CANIndex, CANFD_MSG* pCanMs
 }
 
 int can_toomoss_canfd_send_msg(int DevHandle, uint8_t CANIndex, CANFD_MSG* pCanMsg, uint32_t SendMsgNum) {
-	if (pCANFD_SendMsg == NULL) return -1;
-	return pCANFD_SendMsg(DevHandle, CANIndex, pCanMsg, SendMsgNum);
+	if (pCANFD_SendMsgWithTime == NULL) return -1;
+	return pCANFD_SendMsgWithTime(DevHandle, CANIndex, pCanMsg, SendMsgNum);
 }
 
 int can_toomoss_canfd_get_speed_arg(int DevHandle, CANFD_INIT_CONFIG* pCanConfig, uint32_t ABitrate, uint32_t DBitrate) {
@@ -417,6 +417,11 @@ const (
 
 const (
 	toomossCANFDIDMaskStandard = 0x7FF
+	toomossCANFDIDMaskExtended = 0x1FFFFFFF
+	toomossCANFDIDFlagRemote   = 1 << 30
+	toomossCANFDIDFlagExtended = 1 << 31
+	toomossCANFDFlagChannel    = 0x60
+	toomossCANFDFlagTx         = 0x80
 	toomossClassicFlagRemote   = 0x01
 	toomossClassicFlagChannel  = 0x60
 	toomossClassicFlagTx       = 0x80
@@ -494,6 +499,21 @@ func decodeToomossClassicFlags(remoteFlag, externFlag byte) (channel byte, remot
 	extended = (externFlag & toomossClassicFlagExt) != 0
 	errorFrame = (externFlag & toomossClassicFlagError) != 0
 	txEcho = (remoteFlag & toomossClassicFlagTx) != 0
+	return
+}
+
+func decodeToomossCANFDID(rawID uint32) (id uint32, remote bool, extended bool) {
+	id = rawID & toomossCANFDIDMaskExtended
+	remote = rawID&toomossCANFDIDFlagRemote != 0
+	extended = rawID&toomossCANFDIDFlagExtended != 0
+	return
+}
+
+func decodeToomossCANFDFlags(flags byte) (channel byte, isFD bool, brs bool, txEcho bool) {
+	channel = (flags & toomossCANFDFlagChannel) >> 5
+	isFD = flags&CANFD_MSG_FLAG_FDF != 0
+	brs = flags&CANFD_MSG_FLAG_BRS != 0
+	txEcho = flags&toomossCANFDFlagTx != 0
 	return
 }
 
@@ -795,14 +815,19 @@ func (c *Toomoss) readLoop() {
 			if getCanFDMsgNum <= 0 {
 				continue
 			}
+			if getCanFDMsgNum > len(canFDMsg) {
+				log.Printf("Toomoss returned invalid CAN-FD receive count %d", getCanFDMsgNum)
+				getCanFDMsgNum = len(canFDMsg)
+			}
 
 			for i := 0; i < getCanFDMsgNum; i++ {
 				msg := canFDMsg[i]
-				if uint32(msg.ID) > toomossCANFDIDMaskStandard {
+				id, remote, extended := decodeToomossCANFDID(uint32(msg.ID))
+				if remote || extended || id > toomossCANFDIDMaskStandard {
 					continue
 				}
 				flags := byte(msg.Flags)
-				isFD := flags&CANFD_MSG_FLAG_FDF != 0
+				_, isFD, brs, txEcho := decodeToomossCANFDFlags(flags)
 				actualLen := toomossDLCToDataLen(byte(msg.DLC), isFD)
 				dlc := dataLenToDlc(actualLen)
 
@@ -811,23 +836,31 @@ func (c *Toomoss) readLoop() {
 					payload[j] = byte(msg.Data[j])
 				}
 
+				direction := RX
+				directionLabel := "RX"
+				if txEcho {
+					direction = TX
+					directionLabel = "TX"
+				}
 				unifiedMsg := CanFrame{
-					Direction:   RX,
-					ID:          uint32(msg.ID),
+					Direction:   direction,
+					ID:          id,
 					DLC:         dlc,
 					Data:        payload,
 					IsFD:        isFD,
-					BRS:         isFD && flags&CANFD_MSG_FLAG_BRS != 0,
+					BRS:         isFD && brs,
 					TimestampUS: toomossTimestampUS(byte(msg.TimeStampHigh), uint32(msg.TimeStamp), 10),
 				}
 
-				msgType := c.canType
-				if flags == CAN_MSG_FLAG_STD {
-					msgType = CAN
-				} else {
+				msgType := CAN
+				if isFD {
 					msgType = CANFD
 				}
-				logCANMessage("RX", unifiedMsg.ID, unifiedMsg.DLC, unifiedMsg.Data[:actualLen], msgType, unifiedMsg.TimestampUS)
+				logCANMessage(directionLabel, unifiedMsg.ID, unifiedMsg.DLC, unifiedMsg.Data[:actualLen], msgType, unifiedMsg.TimestampUS)
+				if txEcho && !c.cfg.IncludeTxEcho {
+					c.observeBusFrame(unifiedMsg)
+					continue
+				}
 				c.publishRx(c.ctx, c.rxChan, unifiedMsg)
 			}
 		}
@@ -844,6 +877,7 @@ func (c *Toomoss) readClassicBurst(canMsg *[MsgBufferSize]C.CAN_MSG) {
 		return
 	}
 	if getCANMsgNum > len(canMsg) {
+		log.Printf("Toomoss returned invalid classic CAN receive count %d", getCANMsgNum)
 		getCANMsgNum = len(canMsg)
 	}
 
@@ -854,12 +888,10 @@ func (c *Toomoss) readClassicBurst(canMsg *[MsgBufferSize]C.CAN_MSG) {
 			continue
 		}
 		direction := RX
-		skipPublish := false
+		directionLabel := "RX"
 		if txEcho {
 			direction = TX
-			if !c.cfg.IncludeTxEcho {
-				skipPublish = true
-			}
+			directionLabel = "TX"
 		}
 		actualLen := int(msg.DataLen)
 		if actualLen > len(msg.Data) {
@@ -880,8 +912,8 @@ func (c *Toomoss) readClassicBurst(canMsg *[MsgBufferSize]C.CAN_MSG) {
 			TimestampUS: toomossTimestampUS(byte(msg.TimeStampHigh), uint32(msg.TimeStamp), 100),
 		}
 
-		logCANMessage("RX", unifiedMsg.ID, unifiedMsg.DLC, unifiedMsg.Data[:actualLen], CAN, unifiedMsg.TimestampUS)
-		if skipPublish {
+		logCANMessage(directionLabel, unifiedMsg.ID, unifiedMsg.DLC, unifiedMsg.Data[:actualLen], CAN, unifiedMsg.TimestampUS)
+		if txEcho && !c.cfg.IncludeTxEcho {
 			c.observeBusFrame(unifiedMsg)
 			continue
 		}
@@ -936,7 +968,11 @@ func (c *Toomoss) Write(id int32, fd bool, data []byte) error {
 
 	var msg C.CANFD_MSG
 	msg.ID = C.uint32_t(id)
-	msg.DLC = C.uint8_t(len(data))
+	transmitLen := len(data)
+	if fd {
+		transmitLen = dlcToLen(dataLenToDlc(transmitLen))
+	}
+	msg.DLC = C.uint8_t(transmitLen)
 	if fd {
 		flags := CANFD_MSG_FLAG_FDF
 		if c.cfg.BRS {
@@ -958,28 +994,7 @@ func (c *Toomoss) Write(id int32, fd bool, data []byte) error {
 	))
 
 	if sendRet == 1 {
-		logType := CAN
-		if fd {
-			logType = CANFD
-		}
-
-		var payload [64]byte
-		copy(payload[:], data)
-
-		unifiedMsg := CanFrame{
-			Direction: TX,
-			ID:        uint32(msg.ID),
-			DLC:       dataLenToDlc(len(data)),
-			Data:      payload,
-			IsFD:      byte(msg.Flags)&CANFD_MSG_FLAG_FDF != 0,
-			BRS:       byte(msg.Flags)&CANFD_MSG_FLAG_BRS != 0,
-		}
-
-		logCANMessage("TX", uint32(id), unifiedMsg.DLC, payload[:len(data)], logType, 0)
 		c.recordBusTx(id, fd, fd && c.cfg.BRS, data)
-		if c.cfg.IncludeTxEcho {
-			c.publishRx(c.ctx, c.rxChan, unifiedMsg)
-		}
 		return nil
 	}
 
@@ -989,7 +1004,7 @@ func (c *Toomoss) Write(id int32, fd bool, data []byte) error {
 
 func (c *Toomoss) writeClassicCAN(id int32, fd bool, data []byte) error {
 	if int(C.can_toomoss_has_can()) == 0 {
-		return errors.New("CAN_SendMsg not loaded")
+		return errors.New("CAN_SendMsgWithTime not loaded")
 	}
 	if fd {
 		return errors.New("legacy Toomoss firmware does not support CAN-FD frames")
@@ -1020,20 +1035,7 @@ func (c *Toomoss) writeClassicCAN(id int32, fd bool, data []byte) error {
 		return errors.New("CAN message send failed")
 	}
 
-	var unifiedData [64]byte
-	copy(unifiedData[:], data)
-	unifiedMsg := CanFrame{
-		Direction: TX,
-		ID:        canID,
-		DLC:       dataLenToDlc(len(data)),
-		Data:      unifiedData,
-		IsFD:      false,
-	}
-	logCANMessage("TX", canID, unifiedMsg.DLC, data, CAN, 0)
 	c.recordBusTx(id, false, false, data)
-	if c.cfg.IncludeTxEcho {
-		c.publishRx(c.ctx, c.rxChan, unifiedMsg)
-	}
 	return nil
 }
 

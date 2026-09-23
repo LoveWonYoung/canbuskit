@@ -55,6 +55,37 @@ func TestToomossClassicFlags(t *testing.T) {
 			channel, remote, extended, errorFrame, txEcho,
 		)
 	}
+
+	channel, remote, extended, errorFrame, txEcho = decodeToomossClassicFlags(
+		toomossClassicFlagTx|toomossClassicFlagChannel,
+		0,
+	)
+	if channel != 3 || remote || extended || errorFrame || !txEcho {
+		t.Fatalf(
+			"decoded TX flags = channel %d, remote %t, extended %t, error %t, tx %t",
+			channel, remote, extended, errorFrame, txEcho,
+		)
+	}
+}
+
+func TestToomossCANFDFlags(t *testing.T) {
+	flags := byte(CANFD_MSG_FLAG_FDF | CANFD_MSG_FLAG_BRS | toomossCANFDFlagChannel | toomossCANFDFlagTx)
+	channel, isFD, brs, txEcho := decodeToomossCANFDFlags(flags)
+	if channel != 3 || !isFD || !brs || !txEcho {
+		t.Fatalf("decoded flags = channel %d, FD %t, BRS %t, TX %t", channel, isFD, brs, txEcho)
+	}
+
+	_, isFD, brs, txEcho = decodeToomossCANFDFlags(0)
+	if isFD || brs || txEcho {
+		t.Fatalf("classic RX flags decoded as FD=%t BRS=%t TX=%t", isFD, brs, txEcho)
+	}
+}
+
+func TestToomossCANFDIDFlags(t *testing.T) {
+	id, remote, extended := decodeToomossCANFDID(0x123 | toomossCANFDIDFlagRemote | toomossCANFDIDFlagExtended)
+	if id != 0x123 || !remote || !extended {
+		t.Fatalf("decoded ID = 0x%X, remote %t, extended %t", id, remote, extended)
+	}
 }
 
 func TestToomossDLCToDataLen(t *testing.T) {
