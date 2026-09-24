@@ -179,7 +179,11 @@ func (o *driverObservability) recordBusTx(id int32, fd, brs bool, data []byte) {
 }
 
 func (o *driverObservability) observeBusFrame(frame CanFrame) {
-	o.busLoad.observe(frame, time.Now())
+	o.observeBusFrameWithWrap(frame, 0)
+}
+
+func (o *driverObservability) observeBusFrameWithWrap(frame CanFrame, wrapPeriodUS uint64) {
+	o.busLoad.observeWithWrap(frame, time.Now(), wrapPeriodUS)
 }
 
 func (o *driverObservability) closeTelemetry() {
@@ -190,7 +194,11 @@ func (o *driverObservability) closeTelemetry() {
 }
 
 func (o *driverObservability) publishRx(ctx context.Context, destination chan<- CanFrame, frame CanFrame) bool {
-	o.observeBusFrame(frame)
+	return o.publishRxWithWrap(ctx, destination, frame, 0)
+}
+
+func (o *driverObservability) publishRxWithWrap(ctx context.Context, destination chan<- CanFrame, frame CanFrame, wrapPeriodUS uint64) bool {
+	o.observeBusFrameWithWrap(frame, wrapPeriodUS)
 	select {
 	case <-ctx.Done():
 		return false

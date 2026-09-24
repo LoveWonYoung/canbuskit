@@ -64,28 +64,8 @@ func dlcToLen(dlc byte) int {
 	}
 }
 
-// logCANMessage 统一的CAN消息日志记录函数
-func logCANMessage(direction string, id uint32, dlc byte, data []byte, canType CanType, timestampUS uint64) {
-	if !printLogEnabled() {
-		return
-	}
-	if filter := logFilter.Load(); filter != nil && !filter.allows(id) {
-		return
-	}
-	typeStr := "CANFD"
-	if canType == CAN {
-		typeStr = "CAN  "
-	}
-	seconds := timestampUS / 1_000_000
-	milliseconds := timestampUS / 1_000 % 1_000
-	microseconds := timestampUS % 1_000
-	format := "%s %s: Timestamp=%ds %03dms %03dus, ID=0x%03X, DLC=%02d, Data=% 02X"
-	log.Printf(format, direction, typeStr, seconds, milliseconds, microseconds, id, dlc, data)
-}
-
 // logCANMessageRelative records time since the first hardware frame and time
-// since the preceding hardware frame. CanalystII intentionally continues to
-// use logCANMessage because its transmit path has no hardware confirmation.
+// since the preceding hardware frame.
 func logCANMessageRelative(direction string, id uint32, dlc byte, data []byte, canType CanType, elapsedUS, deltaUS uint64) {
 	if !printLogEnabled() {
 		return

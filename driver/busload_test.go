@@ -187,3 +187,117 @@ func TestDriverObservabilityBusLoad(t *testing.T) {
 		t.Fatal("expected non-zero bus load")
 	}
 }
+
+func TestBusLoadUsesHardwareFrameTimes(t *testing.T) {
+	var meter busLoadMeter
+	meter.configure(Config{NominalBitrate: 500_000})
+	now := time.Unix(0, 0)
+	meter.observe(CanFrame{Direction: RX, ID: 0x100, TimestampUS: 1_000_000}, now)
+	// Both frames reached the read loop together, but occurred 1.1 s apart on the bus.
+	meter.observe(CanFrame{Direction: RX, ID: 0x101, TimestampUS: 2_100_000}, now)
+	if got := meter.snapshot(now).FrameCount; got != 1 {
+		t.Fatalf("FrameCount = %d, want only the recent hardware-timed frame", got)
+	}
+}
+
+func TestBusLoadStartupWindowUsesHardwareElapsedTime(t *testing.T) {
+	var meter busLoadMeter
+	meter.configure(Config{NominalBitrate: 500_000})
+	now := time.Unix(0, 0)
+	meter.observe(CanFrame{Direction: RX, ID: 0x100, TimestampUS: 1_000_000}, now)
+	meter.observe(CanFrame{Direction: RX, ID: 0x101, TimestampUS: 1_500_000}, now)
+	if got := meter.snapshot(now); got.Window != 500*time.Millisecond {
+		t.Fatalf("Window = %s, want 500ms from hardware timestamps", got.Window)
+	}
+}
+
+func TestBusLoadMovesTxToEchoTimestamp(t *testing.T) {
+	var meter busLoadMeter
+	meter.configure(Config{NominalBitrate: 500_000})
+	now := time.Unix(0, 0)
+	meter.observe(CanFrame{Direction: RX, ID: 0x100, TimestampUS: 1_000_000}, now)
+	meter.recordTx(0x123, false, false, []byte{0x11}, now.Add(900*time.Millisecond))
+	meter.observe(CanFrame{Direction: TX, ID: 0x123, DLC: 1, Data: [64]byte{0x11}, TimestampUS: 1_050_000}, now.Add(901*time.Millisecond))
+	meter.observe(CanFrame{Direction: RX, ID: 0x200, TimestampUS: 2_000_000}, now.Add(950*time.Millisecond))
+	if got := meter.snapshot(now.Add(1100 * time.Millisecond)).FrameCount; got != 1 {
+		t.Fatalf("FrameCount = %d, want only the latest RX after the TX echo aged out", got)
+	}
+}
+
+func TestBusLoadFallsBackWithoutHardwareTimestamp(t *testing.T) {
+	var meter busLoadMeter
+	meter.configure(Config{NominalBitrate: 500_000})
+	now := time.Unix(0, 0)
+	meter.recordTx(0x123, false, false, nil, now)
+	meter.observe(CanFrame{Direction: TX, ID: 0x123}, now.Add(time.Millisecond))
+	meter.observe(CanFrame{Direction: RX, ID: 0x200}, now.Add(2*time.Millisecond))
+	if got := meter.snapshot(now.Add(3 * time.Millisecond)).FrameCount; got != 2 {
+		t.Fatalf("FrameCount = %d, want TX and RX counted once with host timestamps", got)
+	}
+}
+
+func TestBusLoadHardwareTimestampWrap(t *testing.T) {
+	var meter busLoadMeter
+	meter.configure(Config{NominalBitrate: 500_000})
+	now := time.Unix(0, 0)
+	meter.observeWithWrap(CanFrame{Direction: RX, ID: 0x100, TimestampUS: 999_900}, now, 1_000_000)
+	meter.observeWithWrap(CanFrame{Direction: RX, ID: 0x101, TimestampUS: 100}, now.Add(200*time.Microsecond), 1_000_000)
+	if got := meter.snapshot(now.Add(200 * time.Microsecond)).FrameCount; got != 2 {
+		t.Fatalf("FrameCount = %d, want both frames across hardware clock wrap", got)
+	}
+}
+
+func TestBusLoadMatchesEchoBeforeWriteReturns(t *testing.T) {
+	var meter busLoadMeter
+	meter.configure(Config{NominalBitrate: 500_000})
+	now := time.Unix(0, 0)
+	meter.observe(CanFrame{Direction: TX, ID: 0x123, DLC: 1, Data: [64]byte{0x11}, TimestampUS: 1_000_000}, now)
+	meter.recordTx(0x123, false, false, []byte{0x11}, now.Add(time.Millisecond))
+	if got := meter.snapshot(now.Add(2 * time.Millisecond)).FrameCount; got != 1 {
+		t.Fatalf("FrameCount = %d, want one hardware-timed TX echo", got)
+	}
+	if got := meter.slots[0].frames; got != 0 {
+		t.Fatalf("host-timed TX frames = %d, want 0 after matching early echo", got)
+	}
+}
+
+func TestBusLoadMatchesDelayedTxEcho(t *testing.T) {
+	var meter busLoadMeter
+	meter.configure(Config{NominalBitrate: 500_000})
+	now := time.Unix(0, 0)
+	meter.recordTx(0x123, false, false, nil, now)
+	meter.observe(CanFrame{Direction: TX, ID: 0x123, TimestampUS: 1_200_000}, now.Add(200*time.Millisecond))
+	if got := meter.snapshot(now.Add(200 * time.Millisecond)).FrameCount; got != 1 {
+		t.Fatalf("FrameCount = %d, want one confirmed TX", got)
+	}
+	if got := meter.slots[0].frames; got != 0 {
+		t.Fatalf("host-timed TX frames = %d, want 0 after delayed echo", got)
+	}
+}
+
+func TestBusLoadAgesHardwareWindowBeforeDelayedFrame(t *testing.T) {
+	var meter busLoadMeter
+	meter.configure(Config{NominalBitrate: 500_000})
+	now := time.Unix(0, 0)
+	meter.observe(CanFrame{Direction: RX, ID: 0x100, TimestampUS: 1_000_000}, now)
+	// The second frame is delivered late; its device timestamp advanced only 100 ms.
+	meter.observe(CanFrame{Direction: RX, ID: 0x101, TimestampUS: 1_100_000}, now.Add(1100*time.Millisecond))
+	if got := meter.snapshot(now.Add(1100 * time.Millisecond)).FrameCount; got != 1 {
+		t.Fatalf("FrameCount = %d, want old frame expired before delayed delivery", got)
+	}
+}
+
+func TestBusLoadSteadyHardwareWindowDoesNotDropPartialBucket(t *testing.T) {
+	var meter busLoadMeter
+	meter.configure(Config{NominalBitrate: 500_000, DataBitrate: 2_000_000})
+	start := time.Unix(0, 0)
+	for i := 0; i < 200; i++ {
+		at := time.Duration(i) * 10 * time.Millisecond
+		meter.observe(CanFrame{Direction: RX, ID: 0x123, TimestampUS: 1_000_000 + uint64(at/time.Microsecond)}, start.Add(at))
+	}
+	// The exact one-second window (1.015s, 2.015s] contains frames at 1.02s..1.99s.
+	got := meter.snapshot(start.Add(2015 * time.Millisecond))
+	if got.FrameCount != 98 {
+		t.Fatalf("FrameCount = %d, want 98 frames in the most recent second", got.FrameCount)
+	}
+}

@@ -7,12 +7,15 @@ import (
 
 const (
 	defaultBusLoadWindow = time.Second
-	busLoadSlotCount     = 20
-	pendingTxTTL         = 100 * time.Millisecond
+	busLoadSlotCount     = 1000                   // 1 ms buckets limit rolling-window edge error to 1 ms
+	pendingTxTTL         = 100 * time.Millisecond // limit RX lookalike deduplication
+	pendingTxEchoTTL     = time.Second            // allow delayed, explicitly marked TX confirmations
 	maxPendingTx         = 256
 )
 
 // BusLoadInfo is a snapshot of estimated CAN bus occupancy over a recent window.
+// Frames with device timestamps use device time for window placement; frames
+// without one use the host monotonic clock.
 type BusLoadInfo struct {
 	Load           float64
 	Window         time.Duration
@@ -27,8 +30,16 @@ type busLoadSlot struct {
 }
 
 type pendingTx struct {
-	key uint64
-	at  time.Time
+	key        uint64
+	at         time.Time
+	occupiedNs uint64
+	confirmed  bool
+}
+
+type earlyTxEcho struct {
+	frame        CanFrame
+	at           time.Time
+	wrapPeriodUS uint64
 }
 
 type busLoadMeter struct {
@@ -40,7 +51,15 @@ type busLoadMeter struct {
 	origin         time.Time
 	started        time.Time
 	slots          [busLoadSlotCount]busLoadSlot
+	hwSlots        [busLoadSlotCount]busLoadSlot
+	hwOriginUS     uint64
+	hwLastRawUS    uint64
+	hwLastUS       uint64
+	hwFirstUS      uint64
+	hwLastHost     time.Time
+	hwInitialized  bool
 	pending        []pendingTx
+	earlyTx        []earlyTxEcho
 }
 
 func (m *busLoadMeter) configure(cfg Config) {
@@ -61,7 +80,15 @@ func (m *busLoadMeter) configure(cfg Config) {
 	m.origin = time.Time{}
 	m.started = time.Time{}
 	m.slots = [busLoadSlotCount]busLoadSlot{}
+	m.hwSlots = [busLoadSlotCount]busLoadSlot{}
+	m.hwOriginUS = 0
+	m.hwLastRawUS = 0
+	m.hwLastUS = 0
+	m.hwFirstUS = 0
+	m.hwLastHost = time.Time{}
+	m.hwInitialized = false
 	m.pending = nil
+	m.earlyTx = nil
 }
 
 func (m *busLoadMeter) recordTx(id int32, fd, brs bool, data []byte, now time.Time) {
@@ -81,22 +108,58 @@ func (m *busLoadMeter) recordTx(id int32, fd, brs bool, data []byte, now time.Ti
 	}
 	m.addLocked(frame, now)
 	m.pushPending(frame, now)
+	m.expireEarlyTx(now)
+	for i, echo := range m.earlyTx {
+		if busFrameKey(echo.frame) != busFrameKey(frame) {
+			continue
+		}
+		m.earlyTx = append(m.earlyTx[:i], m.earlyTx[i+1:]...)
+		pending := &m.pending[len(m.pending)-1]
+		pending.confirmed = true
+		m.relocatePending(*pending, echo.frame, echo.at, echo.wrapPeriodUS)
+		break
+	}
 }
 
 func (m *busLoadMeter) observe(frame CanFrame, now time.Time) {
+	m.observeWithWrap(frame, now, 0)
+}
+
+func (m *busLoadMeter) observeWithWrap(frame CanFrame, now time.Time, wrapPeriodUS uint64) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	if m.window == 0 {
 		return
 	}
 	m.expirePending(now)
+	m.expireEarlyTx(now)
 	if frame.Direction == TX {
+		if i := m.findPending(frame, true, now); i >= 0 {
+			if !m.pending[i].confirmed {
+				m.pending[i].confirmed = true
+				m.relocatePending(m.pending[i], frame, now, wrapPeriodUS)
+			}
+		} else if frame.TimestampUS != 0 {
+			if len(m.earlyTx) >= maxPendingTx {
+				m.earlyTx = m.earlyTx[1:]
+			}
+			m.earlyTx = append(m.earlyTx, earlyTxEcho{frame: frame, at: now, wrapPeriodUS: wrapPeriodUS})
+		}
 		return
 	}
-	if m.consumePending(frame) {
+	if i := m.findPending(frame, false, now); i >= 0 {
+		pending := m.pending[i]
+		m.pending = append(m.pending[:i], m.pending[i+1:]...)
+		if !pending.confirmed {
+			m.relocatePending(pending, frame, now, wrapPeriodUS)
+		}
 		return
 	}
-	m.addLocked(frame, now)
+	if frame.TimestampUS != 0 {
+		m.addHardwareLocked(frame, now, wrapPeriodUS)
+	} else {
+		m.addLocked(frame, now)
+	}
 }
 
 func (m *busLoadMeter) snapshot(now time.Time) BusLoadInfo {
@@ -106,12 +169,18 @@ func (m *busLoadMeter) snapshot(now time.Time) BusLoadInfo {
 		return BusLoadInfo{}
 	}
 	m.rotate(now)
+	if m.hwInitialized {
+		m.rotateHardware(m.hardwareNow(now))
+	}
 	m.expirePending(now)
+	m.expireEarlyTx(now)
 
 	var occupiedNs, frames uint64
 	for i := range m.slots {
 		occupiedNs += m.slots[i].occupiedNs
 		frames += m.slots[i].frames
+		occupiedNs += m.hwSlots[i].occupiedNs
+		frames += m.hwSlots[i].frames
 	}
 
 	denom := m.window
@@ -122,7 +191,16 @@ func (m *busLoadMeter) snapshot(now time.Time) BusLoadInfo {
 			DataBitrate:    m.dataBitrate,
 		}
 	}
-	if age := now.Sub(m.started); age > 0 && age < m.window {
+	age := now.Sub(m.started)
+	if m.hwInitialized {
+		hardwareAgeUS := m.hardwareNow(now) - m.hwFirstUS
+		if hardwareAgeUS >= uint64(m.window/time.Microsecond) {
+			age = m.window
+		} else if hardwareAge := time.Duration(hardwareAgeUS) * time.Microsecond; hardwareAge > age {
+			age = hardwareAge
+		}
+	}
+	if age > 0 && age < m.window {
 		denom = age
 	}
 	load := float64(occupiedNs) / float64(denom)
@@ -153,6 +231,123 @@ func (m *busLoadMeter) addLocked(frame CanFrame, now time.Time) {
 	}
 	m.slots[idx].occupiedNs += uint64(occupied)
 	m.slots[idx].frames++
+}
+
+func (m *busLoadMeter) relocatePending(pending pendingTx, frame CanFrame, now time.Time, wrapPeriodUS uint64) {
+	if frame.TimestampUS == 0 {
+		return
+	}
+	m.removeHostLocked(pending)
+	m.addHardwareLocked(frame, now, wrapPeriodUS)
+}
+
+func (m *busLoadMeter) removeHostLocked(pending pendingTx) {
+	m.rotate(pending.at)
+	if pending.at.Before(m.origin) {
+		return
+	}
+	idx := int(pending.at.Sub(m.origin) / m.slot)
+	if idx >= len(m.slots) {
+		idx = len(m.slots) - 1
+	}
+	if idx < 0 || m.slots[idx].frames == 0 || m.slots[idx].occupiedNs < pending.occupiedNs {
+		return
+	}
+	m.slots[idx].occupiedNs -= pending.occupiedNs
+	m.slots[idx].frames--
+}
+
+func (m *busLoadMeter) addHardwareLocked(frame CanFrame, now time.Time, wrapPeriodUS uint64) {
+	occupied := frameOccupancy(frame, m.nominalBitrate, m.dataBitrate)
+	if occupied <= 0 {
+		return
+	}
+	if m.hwInitialized {
+		m.rotateHardware(m.hardwareNow(now))
+	}
+	atUS := m.hardwareTimestamp(frame.TimestampUS, now, wrapPeriodUS)
+	m.rotateHardware(atUS)
+	if atUS < m.hwOriginUS {
+		for _, slot := range m.hwSlots {
+			if slot.frames != 0 {
+				return
+			}
+		}
+		m.hwOriginUS = atUS
+	}
+	idx := int((atUS - m.hwOriginUS) / uint64(m.slot/time.Microsecond))
+	if idx >= len(m.hwSlots) {
+		idx = len(m.hwSlots) - 1
+	}
+	m.hwSlots[idx].occupiedNs += uint64(occupied)
+	m.hwSlots[idx].frames++
+	if m.started.IsZero() {
+		m.started = now
+	}
+}
+
+func (m *busLoadMeter) hardwareTimestamp(rawUS uint64, now time.Time, wrapPeriodUS uint64) uint64 {
+	if !m.hwInitialized {
+		m.hwInitialized = true
+		m.hwLastRawUS = rawUS
+		m.hwLastUS = rawUS
+		m.hwFirstUS = rawUS
+		m.hwLastHost = now
+		return rawUS
+	}
+	if rawUS < m.hwLastRawUS {
+		backward := m.hwLastRawUS - rawUS
+		if wrapPeriodUS > 0 && backward > wrapPeriodUS/2 && m.hwLastRawUS < wrapPeriodUS {
+			m.hwLastUS += wrapPeriodUS - m.hwLastRawUS + rawUS
+		} else if backward <= uint64(m.window/time.Microsecond) && backward <= m.hwLastUS {
+			return m.hwLastUS - backward
+		} else {
+			// The device clock restarted; old hardware buckets no longer share its epoch.
+			m.hwSlots = [busLoadSlotCount]busLoadSlot{}
+			m.hwOriginUS = 0
+			m.hwLastUS = rawUS
+			m.hwFirstUS = rawUS
+		}
+	} else {
+		m.hwLastUS += rawUS - m.hwLastRawUS
+	}
+	m.hwLastRawUS = rawUS
+	m.hwLastHost = now
+	return m.hwLastUS
+}
+
+func (m *busLoadMeter) hardwareNow(now time.Time) uint64 {
+	if elapsed := now.Sub(m.hwLastHost); elapsed > 0 {
+		return m.hwLastUS + uint64(elapsed/time.Microsecond)
+	}
+	return m.hwLastUS
+}
+
+func (m *busLoadMeter) rotateHardware(atUS uint64) {
+	if m.hwOriginUS == 0 {
+		m.hwOriginUS = atUS
+		return
+	}
+	if atUS <= m.hwOriginUS {
+		return
+	}
+	windowUS := uint64(m.window / time.Microsecond)
+	elapsed := atUS - m.hwOriginUS
+	if elapsed <= windowUS {
+		return
+	}
+	slotUS := uint64(m.slot / time.Microsecond)
+	shift := (elapsed - windowUS + slotUS - 1) / slotUS
+	if shift >= uint64(len(m.hwSlots)) {
+		m.hwSlots = [busLoadSlotCount]busLoadSlot{}
+		m.hwOriginUS = atUS
+		return
+	}
+	copy(m.hwSlots[:], m.hwSlots[shift:])
+	for i := len(m.hwSlots) - int(shift); i < len(m.hwSlots); i++ {
+		m.hwSlots[i] = busLoadSlot{}
+	}
+	m.hwOriginUS += shift * slotUS
 }
 
 func (m *busLoadMeter) rotate(now time.Time) {
@@ -191,29 +386,42 @@ func (m *busLoadMeter) pushPending(frame CanFrame, now time.Time) {
 	if len(m.pending) >= maxPendingTx {
 		m.pending = m.pending[1:]
 	}
-	m.pending = append(m.pending, pendingTx{key: busFrameKey(frame), at: now})
+	m.pending = append(m.pending, pendingTx{
+		key: busFrameKey(frame), at: now,
+		occupiedNs: uint64(frameOccupancy(frame, m.nominalBitrate, m.dataBitrate)),
+	})
 }
 
-func (m *busLoadMeter) consumePending(frame CanFrame) bool {
+func (m *busLoadMeter) findPending(frame CanFrame, unconfirmedOnly bool, now time.Time) int {
 	key := busFrameKey(frame)
 	for i, pending := range m.pending {
-		if pending.key != key {
+		if pending.key != key || (unconfirmedOnly && pending.confirmed) ||
+			(!unconfirmedOnly && now.Sub(pending.at) > pendingTxTTL) {
 			continue
 		}
-		m.pending = append(m.pending[:i], m.pending[i+1:]...)
-		return true
+		return i
 	}
-	return false
+	return -1
 }
 
 func (m *busLoadMeter) expirePending(now time.Time) {
 	kept := m.pending[:0]
 	for _, pending := range m.pending {
-		if now.Sub(pending.at) <= pendingTxTTL {
+		if now.Sub(pending.at) <= pendingTxEchoTTL {
 			kept = append(kept, pending)
 		}
 	}
 	m.pending = kept
+}
+
+func (m *busLoadMeter) expireEarlyTx(now time.Time) {
+	kept := m.earlyTx[:0]
+	for _, echo := range m.earlyTx {
+		if now.Sub(echo.at) <= pendingTxTTL {
+			kept = append(kept, echo)
+		}
+	}
+	m.earlyTx = kept
 }
 
 func busFrameKey(frame CanFrame) uint64 {

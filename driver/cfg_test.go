@@ -138,8 +138,8 @@ func TestLogFilterList(t *testing.T) {
 	if err := SetLogFilter(LogFilterList, []uint32{0x123, 0x456}); err != nil {
 		t.Fatal(err)
 	}
-	logCANMessage("RX", 0x123, 1, []byte{0xAA}, CAN, 1_002_003)
-	logCANMessage("RX", 0x321, 1, []byte{0xBB}, CAN, 0)
+	logCANMessageRelative("RX", 0x123, 1, []byte{0xAA}, CAN, 1_002_003, 500)
+	logCANMessageRelative("RX", 0x321, 1, []byte{0xBB}, CAN, 0, 0)
 
 	got := output.String()
 	if !strings.Contains(got, "ID=0x123") {
@@ -148,17 +148,8 @@ func TestLogFilterList(t *testing.T) {
 	if strings.Contains(got, "ID=0x321") {
 		t.Fatalf("filtered CAN ID was logged: %q", got)
 	}
-	if !strings.Contains(got, "Timestamp=1s 002ms 003us") {
-		t.Fatalf("hardware timestamp was not logged in s/ms/us format: %q", got)
-	}
-}
-
-func TestCanalystTimestampUS(t *testing.T) {
-	if got := canalystTimestampUS(12_345, 1); got != 1_234_500 {
-		t.Fatalf("valid timestamp = %d, want 1234500", got)
-	}
-	if got := canalystTimestampUS(12_345, 0); got != 0 {
-		t.Fatalf("invalid timestamp = %d, want 0", got)
+	if !strings.Contains(got, "Elapsed=1s 002ms 003us, Delta=0s 000ms 500us") {
+		t.Fatalf("relative hardware times were not logged in s/ms/us format: %q", got)
 	}
 }
 

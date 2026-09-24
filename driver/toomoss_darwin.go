@@ -859,10 +859,10 @@ func (c *Toomoss) readLoop() {
 				elapsedUS, deltaUS := c.relativeLogTimes(unifiedMsg.TimestampUS, toomossTimestampWrapUS(10))
 				logCANMessageRelative(directionLabel, unifiedMsg.ID, unifiedMsg.DLC, unifiedMsg.Data[:actualLen], msgType, elapsedUS, deltaUS)
 				if txEcho && !c.cfg.IncludeTxEcho {
-					c.observeBusFrame(unifiedMsg)
+					c.observeBusFrameWithWrap(unifiedMsg, toomossTimestampWrapUS(10))
 					continue
 				}
-				c.publishRx(c.ctx, c.rxChan, unifiedMsg)
+				c.publishRxWithWrap(c.ctx, c.rxChan, unifiedMsg, toomossTimestampWrapUS(10))
 			}
 		}
 	}
@@ -916,10 +916,10 @@ func (c *Toomoss) readClassicBurst(canMsg *[MsgBufferSize]C.CAN_MSG) {
 		elapsedUS, deltaUS := c.relativeLogTimes(unifiedMsg.TimestampUS, toomossTimestampWrapUS(100))
 		logCANMessageRelative(directionLabel, unifiedMsg.ID, unifiedMsg.DLC, unifiedMsg.Data[:actualLen], CAN, elapsedUS, deltaUS)
 		if txEcho && !c.cfg.IncludeTxEcho {
-			c.observeBusFrame(unifiedMsg)
+			c.observeBusFrameWithWrap(unifiedMsg, toomossTimestampWrapUS(100))
 			continue
 		}
-		c.publishRx(c.ctx, c.rxChan, unifiedMsg)
+		c.publishRxWithWrap(c.ctx, c.rxChan, unifiedMsg, toomossTimestampWrapUS(100))
 	}
 }
 
