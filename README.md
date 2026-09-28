@@ -248,6 +248,7 @@ TX CANFD: Elapsed=0s 000ms 445us, Delta=0s 000ms 445us, ID=0x456, DLC=15, Data=.
 - PCAN、TSMaster 和 Vector：TX 日志来自设备发送确认，使用设备返回的硬件时间戳。
 - Toomoss CAN FD 模式：根据 `CANFD_MSG.Flags` 的 bit7 判断 TX，时间戳单位为 10 μs；在 CAN FD 模式下发送普通 CAN 帧同样可以正确取得 TX 硬件时间戳。
 - Toomoss 标准 CAN 模式：根据 `CAN_MSG.RemoteFlag` 的 bit7 判断 TX，时间戳单位为 100 μs。当前实测的 Toomoss 标准 CAN 接口存在厂商问题，`CAN_SendMsgWithTime` 返回的发送帧没有设置 bit7，因此该帧会按 RX 显示。驱动不会根据 ID 和数据内容推测 TX，以免把其他节点发送的相同报文误判为 TX。
+- CanalystII：`TimeFlag` 有效时，RX 使用 `VCI_CAN_OBJ.TimeStamp` 提供的 100 μs 硬件计数器并处理 32 位回绕。`VCI_Transmit` 不返回设备时间戳或发送确认，因此主动 TX 日志的相对时间为 `0`，总线负载统计使用主机时间。
 
 `IncludeTxEcho` 默认为 `false`。它只控制 TX 回显是否进入 `RxChan`，不影响 TX 日志。抓包程序需要同时消费 RX 和 TX 时可以显式开启；UDS 客户端始终只处理 RX 帧。
 

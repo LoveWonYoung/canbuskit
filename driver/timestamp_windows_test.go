@@ -26,6 +26,18 @@ func TestTSMasterTimestampUS(t *testing.T) {
 	}
 }
 
+func TestCanalystTimestampUS(t *testing.T) {
+	if got := canalystTimestampUS(123, 1); got != 12_300 {
+		t.Fatalf("valid timestamp = %d, want 12300", got)
+	}
+	if got := canalystTimestampUS(123, 0); got != 0 {
+		t.Fatalf("disabled timestamp = %d, want 0", got)
+	}
+	if got, want := canalystTimestampWrapUS(), (uint64(1)<<32)*100; got != want {
+		t.Fatalf("timestamp wrap = %d, want %d", got, want)
+	}
+}
+
 func TestPCANEchoLogUsesRelativeHardwareTimes(t *testing.T) {
 	originalOutput := log.Writer()
 	var output bytes.Buffer

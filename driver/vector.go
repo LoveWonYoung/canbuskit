@@ -757,11 +757,11 @@ func (v *Vector) readOneCanFD() bool {
 	elapsedUS, deltaUS := v.relativeLogTimes(unified.TimestampUS, 0)
 	logCANMessageRelative(direction, unified.ID, unified.DLC, unified.Data[:payloadLen], msgType, elapsedUS, deltaUS)
 	if unified.Direction == TX && !v.cfg.IncludeTxEcho {
-		v.observeBusFrame(unified)
+		v.observeBusFrameWithBitCount(unified, msg.TotalBitCnt)
 		return true
 	}
 
-	v.publishRx(v.ctx, v.rxChan, unified)
+	v.publishRxWithBitCount(v.ctx, v.rxChan, unified, msg.TotalBitCnt)
 
 	return true
 }

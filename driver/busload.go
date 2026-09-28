@@ -40,6 +40,7 @@ type earlyTxEcho struct {
 	frame        CanFrame
 	at           time.Time
 	wrapPeriodUS uint64
+	occupiedNs   uint64
 }
 
 type busLoadMeter struct {
@@ -116,7 +117,7 @@ func (m *busLoadMeter) recordTx(id int32, fd, brs bool, data []byte, now time.Ti
 		m.earlyTx = append(m.earlyTx[:i], m.earlyTx[i+1:]...)
 		pending := &m.pending[len(m.pending)-1]
 		pending.confirmed = true
-		m.relocatePending(*pending, echo.frame, echo.at, echo.wrapPeriodUS)
+		m.relocatePending(*pending, echo.frame, echo.at, echo.wrapPeriodUS, echo.occupiedNs)
 		break
 	}
 }
@@ -126,10 +127,22 @@ func (m *busLoadMeter) observe(frame CanFrame, now time.Time) {
 }
 
 func (m *busLoadMeter) observeWithWrap(frame CanFrame, now time.Time, wrapPeriodUS uint64) {
+	m.observeWithBitCount(frame, 0, now, wrapPeriodUS)
+}
+
+// observeWithBitCount records a frame using a hardware-reported on-wire bit
+// count when available. Vector's totalBitCnt covers the frame through EOF, so
+// the three nominal-rate intermission bits are added to retain the meter's
+// existing definition of bus occupancy.
+func (m *busLoadMeter) observeWithBitCount(frame CanFrame, totalBitCount uint16, now time.Time, wrapPeriodUS uint64) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	if m.window == 0 {
 		return
+	}
+	occupied := frameOccupancy(frame, m.nominalBitrate, m.dataBitrate)
+	if totalBitCount != 0 {
+		occupied = frameOccupancyFromBitCount(frame, int(totalBitCount)+3, m.nominalBitrate, m.dataBitrate)
 	}
 	m.expirePending(now)
 	m.expireEarlyTx(now)
@@ -137,13 +150,15 @@ func (m *busLoadMeter) observeWithWrap(frame CanFrame, now time.Time, wrapPeriod
 		if i := m.findPending(frame, true, now); i >= 0 {
 			if !m.pending[i].confirmed {
 				m.pending[i].confirmed = true
-				m.relocatePending(m.pending[i], frame, now, wrapPeriodUS)
+				m.relocatePending(m.pending[i], frame, now, wrapPeriodUS, uint64(occupied))
 			}
 		} else if frame.TimestampUS != 0 {
 			if len(m.earlyTx) >= maxPendingTx {
 				m.earlyTx = m.earlyTx[1:]
 			}
-			m.earlyTx = append(m.earlyTx, earlyTxEcho{frame: frame, at: now, wrapPeriodUS: wrapPeriodUS})
+			m.earlyTx = append(m.earlyTx, earlyTxEcho{
+				frame: frame, at: now, wrapPeriodUS: wrapPeriodUS, occupiedNs: uint64(occupied),
+			})
 		}
 		return
 	}
@@ -151,14 +166,14 @@ func (m *busLoadMeter) observeWithWrap(frame CanFrame, now time.Time, wrapPeriod
 		pending := m.pending[i]
 		m.pending = append(m.pending[:i], m.pending[i+1:]...)
 		if !pending.confirmed {
-			m.relocatePending(pending, frame, now, wrapPeriodUS)
+			m.relocatePending(pending, frame, now, wrapPeriodUS, uint64(occupied))
 		}
 		return
 	}
 	if frame.TimestampUS != 0 {
-		m.addHardwareLocked(frame, now, wrapPeriodUS)
+		m.addHardwareLocked(frame, now, wrapPeriodUS, uint64(occupied))
 	} else {
-		m.addLocked(frame, now)
+		m.addDurationLocked(uint64(occupied), now)
 	}
 }
 
@@ -218,6 +233,11 @@ func (m *busLoadMeter) snapshot(now time.Time) BusLoadInfo {
 
 func (m *busLoadMeter) addLocked(frame CanFrame, now time.Time) {
 	occupied := frameOccupancy(frame, m.nominalBitrate, m.dataBitrate)
+	m.addDurationLocked(uint64(occupied), now)
+}
+
+func (m *busLoadMeter) addDurationLocked(occupiedNs uint64, now time.Time) {
+	occupied := time.Duration(occupiedNs)
 	if occupied <= 0 {
 		return
 	}
@@ -229,16 +249,16 @@ func (m *busLoadMeter) addLocked(frame CanFrame, now time.Time) {
 	if idx < 0 {
 		return
 	}
-	m.slots[idx].occupiedNs += uint64(occupied)
+	m.slots[idx].occupiedNs += occupiedNs
 	m.slots[idx].frames++
 }
 
-func (m *busLoadMeter) relocatePending(pending pendingTx, frame CanFrame, now time.Time, wrapPeriodUS uint64) {
+func (m *busLoadMeter) relocatePending(pending pendingTx, frame CanFrame, now time.Time, wrapPeriodUS uint64, occupiedNs uint64) {
 	if frame.TimestampUS == 0 {
 		return
 	}
 	m.removeHostLocked(pending)
-	m.addHardwareLocked(frame, now, wrapPeriodUS)
+	m.addHardwareLocked(frame, now, wrapPeriodUS, occupiedNs)
 }
 
 func (m *busLoadMeter) removeHostLocked(pending pendingTx) {
@@ -257,9 +277,8 @@ func (m *busLoadMeter) removeHostLocked(pending pendingTx) {
 	m.slots[idx].frames--
 }
 
-func (m *busLoadMeter) addHardwareLocked(frame CanFrame, now time.Time, wrapPeriodUS uint64) {
-	occupied := frameOccupancy(frame, m.nominalBitrate, m.dataBitrate)
-	if occupied <= 0 {
+func (m *busLoadMeter) addHardwareLocked(frame CanFrame, now time.Time, wrapPeriodUS uint64, occupiedNs uint64) {
+	if occupiedNs == 0 {
 		return
 	}
 	if m.hwInitialized {
@@ -279,7 +298,7 @@ func (m *busLoadMeter) addHardwareLocked(frame CanFrame, now time.Time, wrapPeri
 	if idx >= len(m.hwSlots) {
 		idx = len(m.hwSlots) - 1
 	}
-	m.hwSlots[idx].occupiedNs += uint64(occupied)
+	m.hwSlots[idx].occupiedNs += occupiedNs
 	m.hwSlots[idx].frames++
 	if m.started.IsZero() {
 		m.started = now
@@ -451,6 +470,34 @@ func frameOccupancy(frame CanFrame, nominalBitrate, dataBitrate uint32) time.Dur
 		occupied += bitsToDuration(dataBits, dataBitrate)
 	}
 	return occupied
+}
+
+// frameOccupancyFromBitCount converts Vector's measured totalBitCnt into bus
+// time. For BRS frames XL API does not expose separate arbitration/data phase
+// counts, so the measured total is split in the same proportion as the frame
+// model. Non-BRS frames use the measured count directly at the nominal rate.
+func frameOccupancyFromBitCount(frame CanFrame, totalBits int, nominalBitrate, dataBitrate uint32) time.Duration {
+	if totalBits <= 0 || nominalBitrate == 0 {
+		return 0
+	}
+	if !frame.IsFD || !frame.BRS || dataBitrate == 0 {
+		return bitsToDuration(totalBits, nominalBitrate)
+	}
+
+	estimatedArb, estimatedData := frameBitCounts(frame)
+	estimatedTotal := estimatedArb + estimatedData
+	if estimatedTotal <= 0 || estimatedData <= 0 {
+		return bitsToDuration(totalBits, nominalBitrate)
+	}
+	arbitrationBits := (totalBits*estimatedArb + estimatedTotal/2) / estimatedTotal
+	if arbitrationBits < 1 {
+		arbitrationBits = 1
+	}
+	if arbitrationBits > totalBits {
+		arbitrationBits = totalBits
+	}
+	dataBits := totalBits - arbitrationBits
+	return bitsToDuration(arbitrationBits, nominalBitrate) + bitsToDuration(dataBits, dataBitrate)
 }
 
 func frameBitCounts(frame CanFrame) (arbBits, dataBits int) {

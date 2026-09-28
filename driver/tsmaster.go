@@ -317,6 +317,9 @@ const (
 	tsCANFDPropertyEDL = 1 << 0
 	tsCANFDPropertyBRS = 1 << 1
 	tsCANFDPropertyESI = 1 << 2
+
+	tsAppCAN         = 0
+	tsCANBusStatLoad = 0
 )
 
 // TSMasterMapping maps one application-side logical channel to one physical
@@ -337,15 +340,18 @@ func DefaultTSMasterMapping(hardwareChannel byte) TSMasterMapping {
 
 type TSMaster struct {
 	driverObservability
-	loader      *TSMasterLoader
-	isConnected bool
-	rxChan      chan CanFrame
-	fanout      *rxFanout
-	ctx         context.Context
-	cancel      context.CancelFunc
-	cfg         Config
-	lifecycle   driverLifecycle
-	canType     CanType
+	loader                  *TSMasterLoader
+	isConnected             bool
+	busStatisticsEnabled    bool
+	enableBusStatisticsProc *syscall.LazyProc
+	getBusStatisticsProc    *syscall.LazyProc
+	rxChan                  chan CanFrame
+	fanout                  *rxFanout
+	ctx                     context.Context
+	cancel                  context.CancelFunc
+	cfg                     Config
+	lifecycle               driverLifecycle
+	canType                 CanType
 	// CANChannel is the physical hardware channel and is kept for backwards
 	// compatibility. Internal send/receive operations use mapping.ApplicationChannel.
 	CANChannel byte
@@ -408,6 +414,9 @@ func (t *TSMaster) Init() error {
 			t.cancel()
 		}
 		if t.loader != nil && t.isConnected {
+			if t.busStatisticsEnabled && t.enableBusStatisticsProc != nil {
+				_, _, _ = t.enableBusStatisticsProc.Call(0)
+			}
 			_, _, _ = t.loader.GetProcAddress("tsapp_disconnect").Call()
 		}
 		if t.loader != nil {
@@ -424,6 +433,9 @@ func (t *TSMaster) Init() error {
 		}
 		t.closeTelemetry()
 		t.isConnected = false
+		t.busStatisticsEnabled = false
+		t.enableBusStatisticsProc = nil
+		t.getBusStatisticsProc = nil
 		return err
 	}
 
@@ -431,6 +443,22 @@ func (t *TSMaster) Init() error {
 	t.loader, err = NewTSMasterLoader()
 	if err != nil {
 		return cleanup(fmt.Errorf("failed to load TSMaster DLL: %w", err))
+	}
+	loadStatisticsProc := func(name string) (*syscall.LazyProc, error) {
+		proc := t.loader.GetProcAddress(name)
+		if proc == nil {
+			return nil, fmt.Errorf("%s not found", name)
+		}
+		if err := proc.Find(); err != nil {
+			return nil, fmt.Errorf("%s not found: %w", name, err)
+		}
+		return proc, nil
+	}
+	if t.enableBusStatisticsProc, err = loadStatisticsProc("tsapp_enable_bus_statistics"); err != nil {
+		return cleanup(err)
+	}
+	if t.getBusStatisticsProc, err = loadStatisticsProc("tsapp_get_bus_statistics"); err != nil {
+		return cleanup(err)
 	}
 
 	// 初始化TSMaster库
@@ -519,6 +547,10 @@ func (t *TSMaster) Init() error {
 		return cleanup(fmt.Errorf("tsapp_connect failed: %d", r))
 	}
 	t.isConnected = true
+	if r, _, _ = t.enableBusStatisticsProc.Call(1); int32(r) != 0 {
+		return cleanup(fmt.Errorf("tsapp_enable_bus_statistics failed: %d", int32(r)))
+	}
+	t.busStatisticsEnabled = true
 
 	// 启用接收FIFO
 	enableFIFOProc := t.loader.GetProcAddress("tsfifo_enable_receive_fifo")
@@ -637,6 +669,10 @@ func (t *TSMaster) Stop() {
 	}
 
 	if wasInitialized && t.loader != nil && t.isConnected {
+		if t.busStatisticsEnabled && t.enableBusStatisticsProc != nil {
+			_, _, _ = t.enableBusStatisticsProc.Call(0)
+			t.busStatisticsEnabled = false
+		}
 		_, _, _ = t.loader.GetProcAddress("tsapp_disconnect").Call()
 		t.isConnected = false
 	}
@@ -645,6 +681,8 @@ func (t *TSMaster) Stop() {
 		t.loader.Close()
 		t.loader = nil
 	}
+	t.enableBusStatisticsProc = nil
+	t.getBusStatisticsProc = nil
 
 	if t.rxChan != nil {
 		close(t.rxChan)
@@ -716,6 +754,46 @@ func (t *TSMaster) Config() Config {
 	t.lifecycle.opMu.Lock()
 	defer t.lifecycle.opMu.Unlock()
 	return t.cfg
+}
+
+// BusLoad returns TSMaster's native CAN bus-load statistic. The API reports a
+// percentage (0..100), while BusLoadInfo.Load is normalized to 0..1.
+func (t *TSMaster) BusLoad() BusLoadInfo {
+	t.lifecycle.opMu.Lock()
+	defer t.lifecycle.opMu.Unlock()
+
+	info := BusLoadInfo{
+		Window:         defaultBusLoadWindow,
+		NominalBitrate: t.cfg.NominalBitrate,
+		DataBitrate:    t.cfg.DataBitrate,
+	}
+	if !t.lifecycle.isInitialized() || !t.isConnected || !t.busStatisticsEnabled || t.getBusStatisticsProc == nil {
+		return info
+	}
+
+	var percent float64
+	status, _, _ := t.getBusStatisticsProc.Call(
+		uintptr(tsAppCAN),
+		uintptr(t.mapping.ApplicationChannel),
+		uintptr(tsCANBusStatLoad),
+		uintptr(unsafe.Pointer(&percent)),
+	)
+	if int32(status) != 0 {
+		t.currentTelemetry().report(fmt.Errorf("tsapp_get_bus_statistics failed: %d", int32(status)))
+		return info
+	}
+	info.Load = normalizeTSMasterBusLoad(percent)
+	return info
+}
+
+func normalizeTSMasterBusLoad(percent float64) float64 {
+	if math.IsNaN(percent) || math.IsInf(percent, 0) || percent <= 0 {
+		return 0
+	}
+	if percent >= 100 {
+		return 1
+	}
+	return percent / 100
 }
 
 func (t *TSMaster) SetBRS(enabled bool) {

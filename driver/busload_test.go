@@ -130,6 +130,60 @@ func TestCANFDFrameBitsWithBRSUsesDataPhase(t *testing.T) {
 	}
 }
 
+func TestFrameOccupancyFromBitCountClassic(t *testing.T) {
+	frame := CanFrame{ID: 0x123, DLC: 8}
+	got := frameOccupancyFromBitCount(frame, 103, 500_000, 2_000_000)
+	if want := 206 * time.Microsecond; got != want {
+		t.Fatalf("frameOccupancyFromBitCount() = %s, want %s", got, want)
+	}
+}
+
+func TestFrameOccupancyFromBitCountBRSUsesBothBitrates(t *testing.T) {
+	frame := CanFrame{ID: 0x123, DLC: 15, IsFD: true, BRS: true}
+	got := frameOccupancyFromBitCount(frame, 600, 500_000, 2_000_000)
+	allNominal := bitsToDuration(600, 500_000)
+	allData := bitsToDuration(600, 2_000_000)
+	if got <= allData || got >= allNominal {
+		t.Fatalf("mixed-rate occupancy = %s, want between %s and %s", got, allData, allNominal)
+	}
+}
+
+func TestBusLoadUsesHardwareBitCount(t *testing.T) {
+	var meter busLoadMeter
+	meter.configure(Config{NominalBitrate: 500_000, DataBitrate: 2_000_000})
+	now := time.Unix(0, 0)
+	frame := CanFrame{Direction: RX, ID: 0x123, DLC: 8, TimestampUS: 1_000_000}
+	meter.observeWithBitCount(frame, 100, now, 0)
+
+	got := meter.snapshot(now.Add(time.Second))
+	want := float64(206*time.Microsecond) / float64(time.Second) // 100 frame bits + 3-bit intermission.
+	if got.Load < want*0.99 || got.Load > want*1.01 {
+		t.Fatalf("Load = %v, want ~%v", got.Load, want)
+	}
+}
+
+func TestBusLoadMovesTxToHardwareBitCount(t *testing.T) {
+	var meter busLoadMeter
+	meter.configure(Config{NominalBitrate: 500_000, DataBitrate: 2_000_000})
+	now := time.Unix(0, 0)
+	meter.recordTx(0x123, false, false, make([]byte, 8), now)
+	meter.observeWithBitCount(CanFrame{
+		Direction: TX, ID: 0x123, DLC: 8, TimestampUS: 1_000_000,
+	}, 100, now.Add(time.Millisecond), 0)
+
+	var hostOccupied, hardwareOccupied uint64
+	for i := range meter.slots {
+		hostOccupied += meter.slots[i].occupiedNs
+		hardwareOccupied += meter.hwSlots[i].occupiedNs
+	}
+	if hostOccupied != 0 {
+		t.Fatalf("host occupancy = %d ns, want 0 after TX confirmation", hostOccupied)
+	}
+	if want := uint64(206 * time.Microsecond); hardwareOccupied != want {
+		t.Fatalf("hardware occupancy = %d ns, want %d", hardwareOccupied, want)
+	}
+}
+
 func TestBusLoadWindowOccupancy(t *testing.T) {
 	var meter busLoadMeter
 	meter.configure(Config{NominalBitrate: 500_000, DataBitrate: 2_000_000})

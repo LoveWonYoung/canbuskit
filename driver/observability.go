@@ -186,6 +186,10 @@ func (o *driverObservability) observeBusFrameWithWrap(frame CanFrame, wrapPeriod
 	o.busLoad.observeWithWrap(frame, time.Now(), wrapPeriodUS)
 }
 
+func (o *driverObservability) observeBusFrameWithBitCount(frame CanFrame, totalBitCount uint16) {
+	o.busLoad.observeWithBitCount(frame, totalBitCount, time.Now(), 0)
+}
+
 func (o *driverObservability) closeTelemetry() {
 	o.mu.RLock()
 	current := o.telemetry
@@ -199,6 +203,15 @@ func (o *driverObservability) publishRx(ctx context.Context, destination chan<- 
 
 func (o *driverObservability) publishRxWithWrap(ctx context.Context, destination chan<- CanFrame, frame CanFrame, wrapPeriodUS uint64) bool {
 	o.observeBusFrameWithWrap(frame, wrapPeriodUS)
+	return o.publishObservedRx(ctx, destination, frame)
+}
+
+func (o *driverObservability) publishRxWithBitCount(ctx context.Context, destination chan<- CanFrame, frame CanFrame, totalBitCount uint16) bool {
+	o.observeBusFrameWithBitCount(frame, totalBitCount)
+	return o.publishObservedRx(ctx, destination, frame)
+}
+
+func (o *driverObservability) publishObservedRx(ctx context.Context, destination chan<- CanFrame, frame CanFrame) bool {
 	select {
 	case <-ctx.Done():
 		return false
