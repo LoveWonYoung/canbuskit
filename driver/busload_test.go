@@ -89,15 +89,53 @@ func referenceClassicCANFrameBits(frame CanFrame) int {
 	return stuffed + 13
 }
 
-func TestCANFDFrameBitsIncludesDLCAndUnstuffedTrailer(t *testing.T) {
+func TestCANFDFrameBitsMatchesISOReference(t *testing.T) {
 	frame := CanFrame{ID: 0x100, DLC: 8, IsFD: true, Data: [64]byte{1, 2, 3, 4, 5, 6, 7, 8}}
-	arb, data := canFDFrameBits(frame)
-	if data != 0 {
-		t.Fatalf("data-phase bits = %d, want 0 (no BRS)", data)
+	for _, brs := range []bool{false, true} {
+		frame.BRS = brs
+		gotArb, gotData := canFDFrameBits(frame)
+		wantArb, wantData := referenceCANFDFrameBits(frame)
+		if gotArb != wantArb || gotData != wantData {
+			t.Fatalf("BRS=%t: canFDFrameBits() = (%d, %d), want (%d, %d)", brs, gotArb, gotData, wantArb, wantData)
+		}
 	}
-	// 1+11+5+4+64+17 = 102 stuffable * 5/4 = 127, +13 trailer = 140.
-	if arb != 140 {
-		t.Fatalf("canFDFrameBits() = %d, want 140", arb)
+}
+
+func TestCANFDFrameBitsMatchesReferenceAcrossPayloads(t *testing.T) {
+	for id := uint32(0); id <= 0x7FF; id += 113 {
+		for dlc := byte(0); dlc <= 15; dlc++ {
+			for _, brs := range []bool{false, true} {
+				frame := CanFrame{ID: id, DLC: dlc, IsFD: true, BRS: brs}
+				for i := range frame.Data {
+					frame.Data[i] = byte(uint32(i)*37 + id + uint32(dlc)*11)
+				}
+				gotArb, gotData := canFDFrameBits(frame)
+				wantArb, wantData := referenceCANFDFrameBits(frame)
+				if gotArb != wantArb || gotData != wantData {
+					t.Fatalf("ID=0x%03X DLC=%d BRS=%t: got (%d, %d), want (%d, %d)", id, dlc, brs, gotArb, gotData, wantArb, wantData)
+				}
+			}
+		}
+	}
+}
+
+func TestCANFDFrameBitsUsesActualPayloadForStuffing(t *testing.T) {
+	zeros := CanFrame{ID: 0x123, DLC: 15, IsFD: true, BRS: true}
+	alternating := zeros
+	for i := 0; i < alternating.DataLength(); i++ {
+		alternating.Data[i] = 0xAA
+	}
+	zeroArb, zeroData := canFDFrameBits(zeros)
+	altArb, altData := canFDFrameBits(alternating)
+	if zeroArb+zeroData <= altArb+altData {
+		t.Fatalf("zero payload = %d bits, alternating payload = %d; expected more dynamic stuffing for zeros", zeroArb+zeroData, altArb+altData)
+	}
+}
+
+func TestCANFDFrameBitsDoesNotAllocate(t *testing.T) {
+	frame := CanFrame{ID: 0x123, DLC: 15, IsFD: true, BRS: true}
+	if allocs := testing.AllocsPerRun(1000, func() { _, _ = canFDFrameBits(frame) }); allocs != 0 {
+		t.Fatalf("canFDFrameBits allocated %.1f objects per call", allocs)
 	}
 }
 
@@ -128,6 +166,74 @@ func TestCANFDFrameBitsWithBRSUsesDataPhase(t *testing.T) {
 	if fast >= slow {
 		t.Fatalf("BRS occupancy %s, want less than %s", fast, slow)
 	}
+}
+
+func referenceCANFDFrameBits(frame CanFrame) (arbBits, dataBits int) {
+	type phasedBit struct {
+		value byte
+		data  bool
+	}
+	payload := frame.DataLength()
+	if payload > 64 {
+		payload = 64
+	}
+	bits := make([]phasedBit, 0, 22+payload*8)
+	appendBits := func(value uint32, n int, dataPhase bool) {
+		for i := n - 1; i >= 0; i-- {
+			bits = append(bits, phasedBit{value: byte((value >> i) & 1), data: dataPhase})
+		}
+	}
+	appendBits(0, 1, false) // SOF
+	appendBits(frame.ID, 11, false)
+	appendBits(0, 2, false) // RRS, IDE
+	appendBits(1, 1, false) // FDF
+	appendBits(0, 1, false) // res
+	if frame.BRS {
+		appendBits(1, 1, false)
+	} else {
+		appendBits(0, 1, false)
+	}
+	appendBits(0, 1, frame.BRS) // ESI
+	appendBits(uint32(frame.DLC&0xF), 4, frame.BRS)
+	for i := 0; i < payload; i++ {
+		appendBits(uint32(frame.Data[i]), 8, frame.BRS)
+	}
+
+	previous := byte(2)
+	run := 0
+	for _, bit := range bits {
+		if bit.data {
+			dataBits++
+		} else {
+			arbBits++
+		}
+		if bit.value == previous {
+			run++
+		} else {
+			previous = bit.value
+			run = 1
+		}
+		if run == 5 {
+			if bit.data {
+				dataBits++
+			} else {
+				arbBits++
+			}
+			previous ^= 1
+			run = 1
+		}
+	}
+
+	crcFieldBits := canFDCrc17FieldBits
+	if payload > 16 {
+		crcFieldBits = canFDCrc21FieldBits
+	}
+	if frame.BRS {
+		dataBits += crcFieldBits
+	} else {
+		arbBits += crcFieldBits
+	}
+	return arbBits + canFDAckTrailerBits, dataBits
 }
 
 func TestFrameOccupancyFromBitCountClassic(t *testing.T) {

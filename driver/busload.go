@@ -543,35 +543,102 @@ func classicCANFrameBits(frame CanFrame) int {
 }
 
 const (
-	canFDSFFArbUnstuffed = 17 // SOF, ID, RRS, IDE, FDF, res, BRS
-	canFDCrcDelimiter    = 1
-	canFDAckTrailer      = 1 + 1 + 7 + 3 // ACK, ACK delimiter, EOF, IFS
+	canFDCrc17FieldBits = 4 + 17 + 6 + 1 // stuff count, CRC, fixed stuff bits, delimiter
+	canFDCrc21FieldBits = 4 + 21 + 7 + 1
+	canFDAckTrailerBits = 1 + 1 + 7 + 3 // ACK, ACK delimiter, EOF, intermission
 )
 
-// canFDFrameBits estimates on-wire bits for an 11-bit CAN-FD frame.
+// canFDFrameBits returns the on-wire bits for an ISO CAN-FD base frame.
+// Dynamic bit stuffing is counted from SOF through the data field using the
+// actual identifier, DLC and payload. The ISO CRC field has a 4-bit stuff
+// count and a fixed number of stuff bits, so it must not be subjected to the
+// dynamic 5-bit rule.
 //
-// CANoe bus statistics use worst-case stuffing on SOF through the CRC
-// sequence (including DLC) and do not stuff CRC delimiter / ACK / EOF / IFS.
-// That combination matches observed CANoe percentages much more closely than
-// linux-can's shorter 5/4 estimate, which omitted DLC and stuffed the trailer.
+// For BRS frames, the BRS bit is assigned to the nominal phase and the CRC
+// delimiter to the data phase. This whole-bit model is exact when the nominal
+// and data sample points are equal; otherwise the two rate-switch boundaries
+// introduce only a sub-bit-time difference.
 func canFDFrameBits(frame CanFrame) (arbBits, dataBits int) {
 	payload := frame.DataLength()
 	if payload > 64 {
 		payload = 64
 	}
-	crcLen := 17
+
+	var counter canFDStuffCounter
+	counter.add(0, 1, false) // SOF
+	counter.add(uint32(frame.ID), 11, false)
+	counter.add(0, 1, false) // RRS
+	counter.add(0, 1, false) // IDE: base frame
+	counter.add(1, 1, false) // FDF
+	counter.add(0, 1, false) // res
+	if frame.BRS {
+		counter.add(1, 1, false) // BRS; switch after its sample point
+	} else {
+		counter.add(0, 1, false)
+	}
+
+	dataPhase := frame.BRS
+	counter.add(0, 1, dataPhase) // ESI: locally transmitted/normal error-active frame
+	counter.add(uint32(frame.DLC&0xF), 4, dataPhase)
+	for i := 0; i < payload; i++ {
+		counter.add(uint32(frame.Data[i]), 8, dataPhase)
+	}
+
+	crcFieldBits := canFDCrc17FieldBits
 	if payload > 16 {
-		crcLen = 21
+		crcFieldBits = canFDCrc21FieldBits
 	}
-	// SOF + ID + RRS/IDE/FDF/res/BRS + DLC + data + CRC
-	stuffable := 1 + 11 + 5 + 4 + payload*8 + crcLen
-	stuffed := stuffable * 5 / 4
-	trailer := canFDCrcDelimiter + canFDAckTrailer
-	if !frame.BRS {
-		return stuffed + trailer, 0
+
+	arbBits, dataBits = counter.nominal, counter.data
+	if frame.BRS {
+		dataBits += crcFieldBits
+	} else {
+		arbBits += crcFieldBits
 	}
-	arbStuffed := canFDSFFArbUnstuffed * 5 / 4
-	return arbStuffed + canFDAckTrailer, stuffed - arbStuffed + canFDCrcDelimiter
+	arbBits += canFDAckTrailerBits
+	return arbBits, dataBits
+}
+
+// canFDStuffCounter counts the ISO CAN-FD dynamic-stuffing region without
+// allocating a temporary bit stream. The run state deliberately continues
+// across the BRS boundary.
+type canFDStuffCounter struct {
+	nominal int
+	data    int
+	run     int
+	prev    byte
+	set     bool
+}
+
+func (c *canFDStuffCounter) add(value uint32, n int, dataPhase bool) {
+	for i := n - 1; i >= 0; i-- {
+		c.count(byte((value>>i)&1), dataPhase)
+	}
+}
+
+func (c *canFDStuffCounter) count(bit byte, dataPhase bool) {
+	bit &= 1
+	c.increment(dataPhase)
+	if c.set && bit == c.prev {
+		c.run++
+	} else {
+		c.prev = bit
+		c.run = 1
+		c.set = true
+	}
+	if c.run == 5 {
+		c.increment(dataPhase)
+		c.prev ^= 1
+		c.run = 1
+	}
+}
+
+func (c *canFDStuffCounter) increment(dataPhase bool) {
+	if dataPhase {
+		c.data++
+	} else {
+		c.nominal++
+	}
 }
 
 type canBitCounter struct {

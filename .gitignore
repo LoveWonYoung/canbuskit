@@ -31,9 +31,12 @@ go.work.sum
 # .idea/
 # .vscode/
 main.go
+!cmd/busload_calibration/main.go
 2026*
 2025*
 DLLs*
 log*
 .fleet/
 bin*
+output
+cmd/
