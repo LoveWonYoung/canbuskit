@@ -1,6 +1,6 @@
 //go:build windows
 
-package driver
+package backend
 
 import "testing"
 
@@ -36,18 +36,18 @@ func TestPCANSetCANFDInitConfig(t *testing.T) {
 
 func TestPCANSetBRS(t *testing.T) {
 	drv := NewPCAN(CANFD, CHANNEL1)
-	if drv.BRS() {
+	if drv.brs() {
 		t.Fatal("BRS must be off by default")
 	}
-	drv.SetBRS(true)
-	if !drv.BRS() {
+	drv.setBRS(true)
+	if !drv.brs() {
 		t.Fatal("SetBRS(true) did not enable BRS")
 	}
-	if !drv.Config().BRS {
-		t.Fatal("Config().BRS not updated")
+	if !drv.config().BRS {
+		t.Fatal("config().BRS not updated")
 	}
-	drv.SetBRS(false)
-	if drv.BRS() {
+	drv.setBRS(false)
+	if drv.brs() {
 		t.Fatal("SetBRS(false) did not disable BRS")
 	}
 }

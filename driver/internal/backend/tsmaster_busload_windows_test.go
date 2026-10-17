@@ -1,6 +1,6 @@
 //go:build windows
 
-package driver
+package backend
 
 import (
 	"math"

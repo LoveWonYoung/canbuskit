@@ -1,4 +1,4 @@
-package driver
+package backend
 
 import (
 	"context"
@@ -59,7 +59,7 @@ func dlcToLen(dlc byte) int {
 
 // logCANMessageRelative records time since the first hardware frame and time
 // since the preceding hardware frame.
-func logCANMessageRelative(cfg Config, direction string, id uint32, dlc byte, data []byte, canType CanType, elapsedUS, deltaUS uint64) {
+func logCANMessageRelative(cfg config, direction string, id uint32, dlc byte, data []byte, canType mode, elapsedUS, deltaUS uint64) {
 	if cfg.Logger == nil {
 		return
 	}
@@ -80,20 +80,27 @@ func logCANMessageRelative(cfg Config, direction string, id uint32, dlc byte, da
 		id, dlc, data))
 }
 
-func logf(cfg Config, format string, args ...any) {
+func logf(cfg config, format string, args ...any) {
 	if cfg.Logger != nil {
 		cfg.Logger.Info(fmt.Sprintf(format, args...))
 	}
 }
 
-// CANDriver 定义了CAN/CAN-FD驱动的统一接口
-type CANDriver interface {
-	Init() error
-	Start()
-	Stop()
-	Write(id int32, fd bool, data []byte) error
-	RxChan() <-chan CanFrame
-	IsFDMode() bool
+// device is the low-level contract implemented by vendor backends. Bus adds
+// context-aware lifecycle, frame validation, and subscription semantics.
+type device interface {
+	initialize() error
+	start() error
+	stop()
+	write(id int32, fd bool, data []byte) error
+	subscribe(buffer int) (<-chan frame, func())
+	isFD() bool
+	config() config
+	setBRS(bool)
+	brs() bool
+	errors() <-chan error
+	stats() driverStats
+	busLoad() busLoadSnapshot
 }
 type CANFDInitConfig struct {
 	NBT_BRP  byte
@@ -127,20 +134,7 @@ func (cfg CANFDInitConfig) ValidateWithBRP() error {
 	return nil
 }
 
-var ErrDriverNotInitialized = errors.New("CAN driver is not initialized")
-
-// ErrorStartingCANDriver is an optional extension for drivers that can report
-// startup failures without changing the legacy CANDriver interface.
-type ErrorStartingCANDriver interface {
-	StartWithError() error
-}
-
-// BRSController is an optional extension that enables CAN-FD bit rate
-// switching on transmitted FD frames. Default is off.
-type BRSController interface {
-	SetBRS(enabled bool)
-	BRS() bool
-}
+var ErrDeviceNotInitialized = errors.New("CAN device is not initialized")
 
 // driverLifecycle serializes initialization/cleanup and makes the read loop
 // start/stop sequence idempotent.

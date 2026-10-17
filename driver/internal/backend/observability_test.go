@@ -1,4 +1,4 @@
-package driver
+package backend
 
 import (
 	"context"
@@ -8,23 +8,23 @@ import (
 
 func TestPublishRxReportsSourceOverflow(t *testing.T) {
 	var observable driverObservability
-	beforeInit := observable.Errors()
+	beforeInit := observable.errors()
 	observable.resetTelemetry()
-	if afterInit := observable.Errors(); beforeInit != afterInit {
+	if afterInit := observable.errors(); beforeInit != afterInit {
 		t.Fatal("resetTelemetry replaced an active pre-init error subscription")
 	}
-	destination := make(chan CanFrame)
+	destination := make(chan frame)
 
-	if observable.publishRx(context.Background(), destination, CanFrame{}) {
+	if observable.publishRx(context.Background(), destination, frame{}) {
 		t.Fatal("publishRx should report a full unbuffered destination")
 	}
-	if got := observable.Stats().SourceDropped; got != 1 {
+	if got := observable.stats().SourceDropped; got != 1 {
 		t.Fatalf("SourceDropped = %d, want 1", got)
 	}
 	select {
-	case err := <-observable.Errors():
-		if !errors.Is(err, ErrRxOverflow) {
-			t.Fatalf("error = %v, want ErrRxOverflow", err)
+	case err := <-observable.errors():
+		if !errors.Is(err, errRxOverflow) {
+			t.Fatalf("error = %v, want errRxOverflow", err)
 		}
 	default:
 		t.Fatal("expected an overflow error")
@@ -34,13 +34,13 @@ func TestPublishRxReportsSourceOverflow(t *testing.T) {
 func TestRxFanoutReportsSubscriberOverflowAndUnsubscribes(t *testing.T) {
 	telemetry := newDriverTelemetry()
 	fanout := &rxFanout{
-		subs:      make(map[chan CanFrame]struct{}),
+		subs:      make(map[chan frame]struct{}),
 		telemetry: telemetry,
 	}
 	received, unsubscribe := fanout.Subscribe(1)
 
-	fanout.dispatch(CanFrame{ID: 1})
-	fanout.dispatch(CanFrame{ID: 2})
+	fanout.dispatch(frame{ID: 1})
+	fanout.dispatch(frame{ID: 2})
 
 	if got := telemetry.stats().SubscriberDropped; got != 1 {
 		t.Fatalf("SubscriberDropped = %d, want 1", got)
@@ -55,16 +55,4 @@ func TestRxFanoutReportsSubscriberOverflowAndUnsubscribes(t *testing.T) {
 		t.Fatal("subscription channel should be closed")
 	}
 	unsubscribe()
-}
-
-func TestRxFanoutDefaultSubscriptionIsStable(t *testing.T) {
-	fanout := &rxFanout{subs: make(map[chan CanFrame]struct{}), telemetry: newDriverTelemetry()}
-	first := fanout.Default(1)
-	second := fanout.Default(8)
-	if first != second {
-		t.Fatal("Default returned a new subscription for the same fanout")
-	}
-	if len(fanout.subs) != 1 {
-		t.Fatalf("subscriber count = %d, want 1", len(fanout.subs))
-	}
 }

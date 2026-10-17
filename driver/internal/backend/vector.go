@@ -1,6 +1,6 @@
 //go:build windows
 
-package driver
+package backend
 
 import (
 	"context"
@@ -147,9 +147,9 @@ type xlCanFdConf struct {
 
 type Vector struct {
 	driverObservability
-	canType   CanType
-	cfg       Config
-	rxChan    chan CanFrame
+	canType   mode
+	cfg       config
+	rxChan    chan frame
 	fanout    *rxFanout
 	ctx       context.Context
 	cancel    context.CancelFunc
@@ -190,11 +190,11 @@ type Vector struct {
 	CANChannel int
 }
 
-func NewVector(canType CanType, deviceType int, canChannel int) *Vector {
-	return NewVectorWithConfig(DefaultConfig(canType, byte(canChannel)), deviceType)
+func NewVector(canType mode, deviceType int, canChannel int) *Vector {
+	return NewVectorWithConfig(defaultConfig(canType, byte(canChannel)), deviceType)
 }
 
-func NewVectorWithConfig(cfg Config, deviceType int) *Vector {
+func NewVectorWithConfig(cfg config, deviceType int) *Vector {
 	ctx, cancel := context.WithCancel(context.Background())
 	return &Vector{
 		canType:       cfg.Mode,
@@ -225,19 +225,19 @@ func (v *Vector) SetCANFDInitConfig(cfg CANFDInitConfig) {
 	v.canFdTseg2Dbr = uint32(cfg.DBT_SEG2)
 }
 
-func (v *Vector) SetBRS(enabled bool) {
+func (v *Vector) setBRS(enabled bool) {
 	v.lifecycle.opMu.Lock()
 	defer v.lifecycle.opMu.Unlock()
 	v.cfg.BRS = enabled
 }
 
-func (v *Vector) BRS() bool {
+func (v *Vector) brs() bool {
 	v.lifecycle.opMu.Lock()
 	defer v.lifecycle.opMu.Unlock()
 	return v.cfg.BRS
 }
 
-func (v *Vector) Init() error {
+func (v *Vector) initialize() error {
 	v.lifecycle.opMu.Lock()
 	defer v.lifecycle.opMu.Unlock()
 	if v.lifecycle.isInitialized() {
@@ -251,7 +251,7 @@ func (v *Vector) Init() error {
 	v.canType = cfg.Mode
 	v.CANChannel = int(cfg.Channel)
 	v.ctx, v.cancel = context.WithCancel(context.Background())
-	v.rxChan = make(chan CanFrame, cfg.RxBufferSize)
+	v.rxChan = make(chan frame, cfg.RxBufferSize)
 	v.fanout = newRxFanout(v.ctx, v.rxChan, v.resetTelemetryWith(cfg))
 	v.portHandle = vectorInvalidPortHandle
 	cleanup := func(err error) error {
@@ -295,25 +295,19 @@ func (v *Vector) Init() error {
 	return nil
 }
 
-func (v *Vector) Start() {
-	if err := v.StartWithError(); err != nil {
-		logf(v.cfg, "Vector start failed: %v", err)
-	}
-}
-
-func (v *Vector) StartWithError() error {
+func (v *Vector) start() error {
 	v.lifecycle.opMu.Lock()
 	defer v.lifecycle.opMu.Unlock()
 	if !v.lifecycle.isInitialized() || v.portHandle == vectorInvalidPortHandle {
-		return fmt.Errorf("%w: Vector", ErrDriverNotInitialized)
+		return fmt.Errorf("%w: Vector", ErrDeviceNotInitialized)
 	}
 	if v.lifecycle.start(v.readLoop) {
-		logf(v.cfg, "Vector can_driver started")
+		logf(v.cfg, "Vector backend started")
 	}
 	return nil
 }
 
-func (v *Vector) Stop() {
+func (v *Vector) stop() {
 	v.lifecycle.opMu.Lock()
 	defer v.lifecycle.opMu.Unlock()
 	wasInitialized := v.lifecycle.cancelAndWait(v.cancel)
@@ -341,7 +335,7 @@ func (v *Vector) Stop() {
 	v.portHandle = vectorInvalidPortHandle
 }
 
-func (v *Vector) Write(id int32, fd bool, data []byte) error {
+func (v *Vector) write(id int32, fd bool, data []byte) error {
 	v.lifecycle.opMu.Lock()
 	defer v.lifecycle.opMu.Unlock()
 	if !v.lifecycle.isInitialized() {
@@ -436,16 +430,7 @@ func (v *Vector) Write(id int32, fd bool, data []byte) error {
 	}
 }
 
-func (v *Vector) RxChan() <-chan CanFrame {
-	v.lifecycle.opMu.Lock()
-	defer v.lifecycle.opMu.Unlock()
-	if v.fanout == nil {
-		return nil
-	}
-	return v.fanout.Default(v.cfg.RxBufferSize)
-}
-
-func (v *Vector) SubscribeRx(buffer int) (<-chan CanFrame, func()) {
+func (v *Vector) subscribe(buffer int) (<-chan frame, func()) {
 	v.lifecycle.opMu.Lock()
 	defer v.lifecycle.opMu.Unlock()
 	if v.fanout == nil {
@@ -454,7 +439,7 @@ func (v *Vector) SubscribeRx(buffer int) (<-chan CanFrame, func()) {
 	return v.fanout.Subscribe(buffer)
 }
 
-func (v *Vector) Config() Config {
+func (v *Vector) config() config {
 	v.lifecycle.opMu.Lock()
 	defer v.lifecycle.opMu.Unlock()
 	return v.cfg
@@ -733,7 +718,7 @@ func (v *Vector) readOneCanFD() bool {
 	dlc := msg.DLC
 	payloadLen := dlcToLen(dlc)
 
-	var unified CanFrame
+	var unified frame
 	unified.Direction = RX
 	if event.Tag == vectorCanFdTagTxOK {
 		unified.Direction = TX
@@ -799,7 +784,7 @@ func (v *Vector) readOneCAN() bool {
 	}
 	payloadLen := dlcToLen(dlc)
 
-	var unified CanFrame
+	var unified frame
 	unified.Direction = RX
 	if event.TagData.Msg.Flags&vectorCanMsgFlagTXCompleted != 0 {
 		unified.Direction = TX
@@ -848,7 +833,7 @@ func (v *Vector) errorString(status int16) string {
 	}
 }
 
-func (v *Vector) IsFDMode() bool {
+func (v *Vector) isFD() bool {
 	v.lifecycle.opMu.Lock()
 	defer v.lifecycle.opMu.Unlock()
 	return v.canType == CANFD

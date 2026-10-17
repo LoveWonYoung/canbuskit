@@ -5,8 +5,7 @@ package tsmaster
 
 import (
 	"github.com/LoveWonYoung/canbuskit/v2/can"
-	"github.com/LoveWonYoung/canbuskit/v2/driver/internal/adapter"
-	legacy "github.com/LoveWonYoung/canbuskit/v2/internal/windriver"
+	"github.com/LoveWonYoung/canbuskit/v2/driver/internal/backend"
 )
 
 type Options struct {
@@ -24,15 +23,15 @@ type Mapping struct {
 func New(cfg can.Config, options Options) can.Driver {
 	deviceType := options.DeviceType
 	if deviceType == 0 {
-		deviceType = legacy.TC1016
+		deviceType = backend.TC1016
 	}
 	if options.Mapping == nil {
-		return adapter.Wrap(legacy.NewTSMasterWithConfig(cfg, deviceType))
+		return backend.TSMasterBus(cfg, deviceType, nil)
 	}
-	mapping := legacy.TSMasterMapping{
+	mapping := backend.TSMasterMapping{
 		ApplicationChannel: options.Mapping.ApplicationChannel,
 		HardwareIndex:      options.Mapping.HardwareIndex,
 		HardwareChannel:    options.Mapping.HardwareChannel,
 	}
-	return adapter.Wrap(legacy.NewTSMasterWithMapping(cfg, deviceType, mapping))
+	return backend.TSMasterBus(cfg, deviceType, &mapping)
 }

@@ -1,6 +1,6 @@
 //go:build windows
 
-package driver
+package backend
 
 import (
 	"context"
@@ -105,10 +105,10 @@ type CanalystII struct {
 	DeviceInd  int
 	lifecycle  driverLifecycle
 	fanout     *rxFanout
-	cfg        Config
+	cfg        config
 	ctx        context.Context
 	cancel     context.CancelFunc
-	rxChan     chan CanFrame
+	rxChan     chan frame
 	opened     bool
 
 	dll             *syscall.LazyDLL
@@ -122,14 +122,14 @@ type CanalystII struct {
 }
 
 func NewCanalystII(canChannel byte) *CanalystII {
-	return NewCanalystIIWithConfig(DefaultConfig(CAN, canChannel))
+	return NewCanalystIIWithConfig(defaultConfig(CAN, canChannel))
 }
 
-func NewCanalystIIWithConfig(cfg Config) *CanalystII {
+func NewCanalystIIWithConfig(cfg config) *CanalystII {
 	return NewCanalystIIWithDevice(cfg, VCI_USBCAN2, 0)
 }
 
-func NewCanalystIIWithDevice(cfg Config, deviceType, deviceInd int) *CanalystII {
+func NewCanalystIIWithDevice(cfg config, deviceType, deviceInd int) *CanalystII {
 	ctx, cancel := context.WithCancel(context.Background())
 	return &CanalystII{
 		CANChannel: cfg.Channel,
@@ -141,7 +141,7 @@ func NewCanalystIIWithDevice(cfg Config, deviceType, deviceInd int) *CanalystII 
 	}
 }
 
-func (c *CanalystII) Init() error {
+func (c *CanalystII) initialize() error {
 	c.lifecycle.opMu.Lock()
 	defer c.lifecycle.opMu.Unlock()
 	if c.lifecycle.isInitialized() {
@@ -158,7 +158,7 @@ func (c *CanalystII) Init() error {
 	c.cfg = cfg
 	c.CANChannel = cfg.Channel
 	c.ctx, c.cancel = context.WithCancel(context.Background())
-	c.rxChan = make(chan CanFrame, cfg.RxBufferSize)
+	c.rxChan = make(chan frame, cfg.RxBufferSize)
 	c.fanout = newRxFanout(c.ctx, c.rxChan, c.resetTelemetryWith(cfg))
 
 	cleanup := func(err error) error {
@@ -240,20 +240,14 @@ func (c *CanalystII) Init() error {
 	return nil
 }
 
-func (c *CanalystII) Start() {
-	if err := c.StartWithError(); err != nil {
-		logf(c.cfg, "CanalystII start failed: %v", err)
-	}
-}
-
-func (c *CanalystII) StartWithError() error {
+func (c *CanalystII) start() error {
 	c.lifecycle.opMu.Lock()
 	defer c.lifecycle.opMu.Unlock()
 	if !c.lifecycle.isInitialized() || !c.opened {
-		return fmt.Errorf("%w: CanalystII", ErrDriverNotInitialized)
+		return fmt.Errorf("%w: CanalystII", ErrDeviceNotInitialized)
 	}
 	if c.lifecycle.start(c.readLoop) {
-		logf(c.cfg, "CanalystII can_driver started")
+		logf(c.cfg, "CanalystII backend started")
 	}
 	return nil
 }
@@ -299,7 +293,7 @@ func (c *CanalystII) readLoop() {
 				if msg.DataLen > 8 {
 					continue
 				}
-				var unifiedMsg CanFrame
+				var unifiedMsg frame
 				unifiedMsg.Direction = RX
 				unifiedMsg.ID = msg.ID
 				unifiedMsg.DLC = msg.DataLen
@@ -317,7 +311,7 @@ func (c *CanalystII) readLoop() {
 	}
 }
 
-func (c *CanalystII) Stop() {
+func (c *CanalystII) stop() {
 	c.lifecycle.opMu.Lock()
 	defer c.lifecycle.opMu.Unlock()
 	wasInitialized := c.lifecycle.cancelAndWait(c.cancel)
@@ -340,7 +334,7 @@ func (c *CanalystII) Stop() {
 	logf(c.cfg, "CanalystII stopped")
 }
 
-func (c *CanalystII) Write(id int32, fd bool, data []byte) error {
+func (c *CanalystII) write(id int32, fd bool, data []byte) error {
 	c.lifecycle.opMu.Lock()
 	defer c.lifecycle.opMu.Unlock()
 	if !c.lifecycle.isInitialized() || !c.opened {
@@ -390,16 +384,7 @@ func canalystTimestampWrapUS() uint64 {
 	return (uint64(1) << 32) * 100
 }
 
-func (c *CanalystII) RxChan() <-chan CanFrame {
-	c.lifecycle.opMu.Lock()
-	defer c.lifecycle.opMu.Unlock()
-	if c.fanout == nil {
-		return nil
-	}
-	return c.fanout.Default(c.cfg.RxBufferSize)
-}
-
-func (c *CanalystII) SubscribeRx(buffer int) (<-chan CanFrame, func()) {
+func (c *CanalystII) subscribe(buffer int) (<-chan frame, func()) {
 	c.lifecycle.opMu.Lock()
 	defer c.lifecycle.opMu.Unlock()
 	if c.fanout == nil {
@@ -408,23 +393,23 @@ func (c *CanalystII) SubscribeRx(buffer int) (<-chan CanFrame, func()) {
 	return c.fanout.Subscribe(buffer)
 }
 
-func (c *CanalystII) IsFDMode() bool {
+func (c *CanalystII) isFD() bool {
 	return false
 }
 
-func (c *CanalystII) Config() Config {
+func (c *CanalystII) config() config {
 	c.lifecycle.opMu.Lock()
 	defer c.lifecycle.opMu.Unlock()
 	return c.cfg
 }
 
-func (c *CanalystII) SetBRS(enabled bool) {
+func (c *CanalystII) setBRS(enabled bool) {
 	c.lifecycle.opMu.Lock()
 	defer c.lifecycle.opMu.Unlock()
 	c.cfg.BRS = enabled
 }
 
-func (c *CanalystII) BRS() bool {
+func (c *CanalystII) brs() bool {
 	c.lifecycle.opMu.Lock()
 	defer c.lifecycle.opMu.Unlock()
 	return c.cfg.BRS

@@ -1,6 +1,6 @@
 //go:build windows
 
-package driver
+package backend
 
 import (
 	"bytes"
@@ -75,13 +75,13 @@ type pcanTimestamp struct {
 
 type PCAN struct {
 	driverObservability
-	rxChan     chan CanFrame
+	rxChan     chan frame
 	fanout     *rxFanout
 	ctx        context.Context
 	cancel     context.CancelFunc
-	cfg        Config
+	cfg        config
 	lifecycle  driverLifecycle
-	canType    CanType
+	canType    mode
 	handle     uint16
 	CANChannel byte
 
@@ -100,11 +100,11 @@ type PCAN struct {
 	getErrorTextProc *syscall.LazyProc
 }
 
-func NewPCAN(canType CanType, canChannel byte) *PCAN {
-	return NewPCANWithConfig(DefaultConfig(canType, canChannel))
+func NewPCAN(canType mode, canChannel byte) *PCAN {
+	return NewPCANWithConfig(defaultConfig(canType, canChannel))
 }
 
-func NewPCANWithConfig(cfg Config) *PCAN {
+func NewPCANWithConfig(cfg config) *PCAN {
 	ctx, cancel := context.WithCancel(context.Background())
 	handle, _ := pcanUSBHandle(int(cfg.Channel))
 	return &PCAN{
@@ -125,19 +125,19 @@ func (p *PCAN) SetCANFDInitConfig(cfg CANFDInitConfig) {
 	p.hasCANFDTiming = true
 }
 
-func (p *PCAN) SetBRS(enabled bool) {
+func (p *PCAN) setBRS(enabled bool) {
 	p.lifecycle.opMu.Lock()
 	defer p.lifecycle.opMu.Unlock()
 	p.cfg.BRS = enabled
 }
 
-func (p *PCAN) BRS() bool {
+func (p *PCAN) brs() bool {
 	p.lifecycle.opMu.Lock()
 	defer p.lifecycle.opMu.Unlock()
 	return p.cfg.BRS
 }
 
-func (p *PCAN) Init() error {
+func (p *PCAN) initialize() error {
 	p.lifecycle.opMu.Lock()
 	defer p.lifecycle.opMu.Unlock()
 	if p.lifecycle.isInitialized() {
@@ -152,7 +152,7 @@ func (p *PCAN) Init() error {
 	p.canType = cfg.Mode
 	p.CANChannel = cfg.Channel
 	p.ctx, p.cancel = context.WithCancel(context.Background())
-	p.rxChan = make(chan CanFrame, cfg.RxBufferSize)
+	p.rxChan = make(chan frame, cfg.RxBufferSize)
 	p.fanout = newRxFanout(p.ctx, p.rxChan, p.resetTelemetryWith(cfg))
 	cleanup := func(err error) error {
 		p.cancel()
@@ -193,26 +193,20 @@ func (p *PCAN) Init() error {
 	return nil
 }
 
-func (p *PCAN) Start() {
-	if err := p.StartWithError(); err != nil {
-		logf(p.cfg, "PCAN start failed: %v", err)
-	}
-}
-
-func (p *PCAN) StartWithError() error {
+func (p *PCAN) start() error {
 	p.lifecycle.opMu.Lock()
 	defer p.lifecycle.opMu.Unlock()
 	if !p.lifecycle.isInitialized() {
-		return fmt.Errorf("%w: PCAN", ErrDriverNotInitialized)
+		return fmt.Errorf("%w: PCAN", ErrDeviceNotInitialized)
 	}
 	p.drainInitialBuffer()
 	if p.lifecycle.start(p.readLoop) {
-		logf(p.cfg, "PCAN can_driver started...")
+		logf(p.cfg, "PCAN backend started")
 	}
 	return nil
 }
 
-func (p *PCAN) Stop() {
+func (p *PCAN) stop() {
 	p.lifecycle.opMu.Lock()
 	defer p.lifecycle.opMu.Unlock()
 	logf(p.cfg, "Stopping PCAN driver...")
@@ -231,7 +225,7 @@ func (p *PCAN) Stop() {
 	p.closeTelemetry()
 }
 
-func (p *PCAN) Write(id int32, fd bool, data []byte) error {
+func (p *PCAN) write(id int32, fd bool, data []byte) error {
 	p.lifecycle.opMu.Lock()
 	defer p.lifecycle.opMu.Unlock()
 	if !p.lifecycle.isInitialized() {
@@ -291,16 +285,7 @@ func (p *PCAN) Write(id int32, fd bool, data []byte) error {
 	}
 }
 
-func (p *PCAN) RxChan() <-chan CanFrame {
-	p.lifecycle.opMu.Lock()
-	defer p.lifecycle.opMu.Unlock()
-	if p.fanout == nil {
-		return nil
-	}
-	return p.fanout.Default(p.cfg.RxBufferSize)
-}
-
-func (p *PCAN) SubscribeRx(buffer int) (<-chan CanFrame, func()) {
+func (p *PCAN) subscribe(buffer int) (<-chan frame, func()) {
 	p.lifecycle.opMu.Lock()
 	defer p.lifecycle.opMu.Unlock()
 	if p.fanout == nil {
@@ -309,7 +294,7 @@ func (p *PCAN) SubscribeRx(buffer int) (<-chan CanFrame, func()) {
 	return p.fanout.Subscribe(buffer)
 }
 
-func (p *PCAN) Config() Config {
+func (p *PCAN) config() config {
 	p.lifecycle.opMu.Lock()
 	defer p.lifecycle.opMu.Unlock()
 	return p.cfg
@@ -548,7 +533,7 @@ func (p *PCAN) enqueueMessage(id uint32, dlc byte, data []byte, msgType uint8, t
 		msgTypeLabel = CANFD
 	}
 
-	var unified CanFrame
+	var unified frame
 	unified.Direction = RX
 	if msgType&pcanMessageEcho != 0 {
 		unified.Direction = TX
@@ -669,7 +654,7 @@ func pcanUSBHandle(channel int) (uint16, error) {
 	return uint16(pcanUSBBaseHigh + channel + 1), nil
 }
 
-func (p *PCAN) IsFDMode() bool {
+func (p *PCAN) isFD() bool {
 	p.lifecycle.opMu.Lock()
 	defer p.lifecycle.opMu.Unlock()
 	return p.canType == CANFD

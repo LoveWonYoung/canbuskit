@@ -5,10 +5,9 @@ package auto
 
 import (
 	"github.com/LoveWonYoung/canbuskit/v2/can"
-	"github.com/LoveWonYoung/canbuskit/v2/driver/internal/adapter"
-	legacy "github.com/LoveWonYoung/canbuskit/v2/internal/windriver"
+	"github.com/LoveWonYoung/canbuskit/v2/driver/internal/backend"
 )
 
 func New(cfg can.Config) can.Driver {
-	return adapter.Wrap(legacy.NewAutoDriverWithConfig(cfg))
+	return backend.Auto(cfg)
 }

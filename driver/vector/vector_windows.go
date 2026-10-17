@@ -5,13 +5,12 @@ package vector
 
 import (
 	"github.com/LoveWonYoung/canbuskit/v2/can"
-	"github.com/LoveWonYoung/canbuskit/v2/driver/internal/adapter"
-	legacy "github.com/LoveWonYoung/canbuskit/v2/internal/windriver"
+	"github.com/LoveWonYoung/canbuskit/v2/driver/internal/backend"
 )
 
 const (
-	VN1630 = legacy.CANOEVN1630
-	VN1640 = legacy.CANOEVN1640
+	VN1630 = backend.CANOEVN1630
+	VN1640 = backend.CANOEVN1640
 )
 
 type Options struct {
@@ -23,5 +22,5 @@ func New(cfg can.Config, options Options) can.Driver {
 	if deviceType == 0 {
 		deviceType = VN1640
 	}
-	return adapter.Wrap(legacy.NewVectorWithConfig(cfg, deviceType))
+	return backend.VectorBus(cfg, deviceType)
 }

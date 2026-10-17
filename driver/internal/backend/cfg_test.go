@@ -1,4 +1,4 @@
-package driver
+package backend
 
 import (
 	"bytes"
@@ -12,14 +12,14 @@ import (
 func TestCanFrameValidDataLength(t *testing.T) {
 	tests := []struct {
 		name  string
-		frame CanFrame
+		frame frame
 		want  int
 		valid bool
 	}{
-		{name: "classic", frame: CanFrame{DLC: 8}, want: 8, valid: true},
-		{name: "classic invalid", frame: CanFrame{DLC: 9}, valid: false},
-		{name: "fd", frame: CanFrame{DLC: 15, FD: true}, want: 64, valid: true},
-		{name: "fd invalid", frame: CanFrame{DLC: 16, FD: true}, valid: false},
+		{name: "classic", frame: frame{DLC: 8}, want: 8, valid: true},
+		{name: "classic invalid", frame: frame{DLC: 9}, valid: false},
+		{name: "fd", frame: frame{DLC: 15, FD: true}, want: 64, valid: true},
+		{name: "fd invalid", frame: frame{DLC: 16, FD: true}, valid: false},
 	}
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
@@ -32,7 +32,7 @@ func TestCanFrameValidDataLength(t *testing.T) {
 }
 
 func TestDefaultConfig(t *testing.T) {
-	cfg := DefaultConfig(CANFD, CHANNEL2)
+	cfg := defaultConfig(CANFD, CHANNEL2)
 	if cfg.Mode != CANFD {
 		t.Fatalf("Mode = %d, want CANFD", cfg.Mode)
 	}
@@ -57,19 +57,19 @@ func TestDefaultConfig(t *testing.T) {
 }
 
 func TestNormalizeConfigFillsDefaults(t *testing.T) {
-	cfg, err := normalizeConfig(Config{Mode: CAN, Channel: CHANNEL1})
+	cfg, err := normalizeConfig(config{Mode: CAN, Channel: CHANNEL1})
 	if err != nil {
 		t.Fatal(err)
 	}
-	want := DefaultConfig(CAN, CHANNEL1)
+	want := defaultConfig(CAN, CHANNEL1)
 	if cfg != want {
 		t.Fatalf("normalizeConfig() = %+v, want %+v", cfg, want)
 	}
 }
 
 func TestNormalizeConfigRejectsInvalidValues(t *testing.T) {
-	tests := []Config{
-		{Mode: CanType(99)},
+	tests := []config{
+		{Mode: mode(99)},
 		{Mode: CAN, RxBufferSize: -1},
 		{Mode: CAN, PollingInterval: -time.Millisecond},
 	}
@@ -84,11 +84,11 @@ func TestNormalizeConfigRejectsInvalidValues(t *testing.T) {
 }
 
 func TestValidateWriteStandardCANAndCANFD(t *testing.T) {
-	canCfg := DefaultConfig(CAN, CHANNEL1)
-	fdCfg := DefaultConfig(CANFD, CHANNEL1)
+	canCfg := defaultConfig(CAN, CHANNEL1)
+	fdCfg := defaultConfig(CANFD, CHANNEL1)
 
 	valid := []struct {
-		cfg  Config
+		cfg  config
 		id   int32
 		fd   bool
 		data []byte
@@ -106,7 +106,7 @@ func TestValidateWriteStandardCANAndCANFD(t *testing.T) {
 	}
 
 	invalid := []struct {
-		cfg  Config
+		cfg  config
 		id   int32
 		fd   bool
 		data []byte
@@ -126,7 +126,7 @@ func TestValidateWriteStandardCANAndCANFD(t *testing.T) {
 
 func TestInjectedFrameLogger(t *testing.T) {
 	var output bytes.Buffer
-	cfg := Config{Logger: slog.New(slog.NewTextHandler(&output, nil))}
+	cfg := config{Logger: slog.New(slog.NewTextHandler(&output, nil))}
 	logCANMessageRelative(cfg, "RX", 0x123, 1, []byte{0xAA}, CAN, 1_002_003, 500)
 
 	got := output.String()
@@ -139,7 +139,7 @@ func TestInjectedFrameLogger(t *testing.T) {
 }
 
 func TestNilLoggerDisablesLogging(t *testing.T) {
-	logCANMessageRelative(Config{}, "RX", 0x123, 1, []byte{0xAA}, CAN, 0, 0)
+	logCANMessageRelative(config{}, "RX", 0x123, 1, []byte{0xAA}, CAN, 0, 0)
 }
 
 func TestDriverLifecycleWaitsForReadLoopAndIsIdempotent(t *testing.T) {

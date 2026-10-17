@@ -1,6 +1,6 @@
 //go:build windows
 
-package driver
+package backend
 
 import (
 	"context"
@@ -344,13 +344,13 @@ type TSMaster struct {
 	busStatisticsEnabled    bool
 	enableBusStatisticsProc *syscall.LazyProc
 	getBusStatisticsProc    *syscall.LazyProc
-	rxChan                  chan CanFrame
+	rxChan                  chan frame
 	fanout                  *rxFanout
 	ctx                     context.Context
 	cancel                  context.CancelFunc
-	cfg                     Config
+	cfg                     config
 	lifecycle               driverLifecycle
-	canType                 CanType
+	canType                 mode
 	// CANChannel is the physical hardware channel and is kept for backwards
 	// compatibility. Internal send/receive operations use mapping.ApplicationChannel.
 	CANChannel byte
@@ -358,15 +358,15 @@ type TSMaster struct {
 	deviceType int
 }
 
-func NewTSMaster(cantype CanType, canChannel byte, deviceType int) *TSMaster {
-	return NewTSMasterWithConfig(DefaultConfig(cantype, canChannel), deviceType)
+func NewTSMaster(cantype mode, canChannel byte, deviceType int) *TSMaster {
+	return NewTSMasterWithConfig(defaultConfig(cantype, canChannel), deviceType)
 }
 
-func NewTSMasterWithConfig(cfg Config, deviceType int) *TSMaster {
+func NewTSMasterWithConfig(cfg config, deviceType int) *TSMaster {
 	return NewTSMasterWithMapping(cfg, deviceType, DefaultTSMasterMapping(cfg.Channel))
 }
 
-func NewTSMasterWithMapping(cfg Config, deviceType int, mapping TSMasterMapping) *TSMaster {
+func NewTSMasterWithMapping(cfg config, deviceType int, mapping TSMasterMapping) *TSMaster {
 	ctx, cancel := context.WithCancel(context.Background())
 	cfg.Channel = mapping.HardwareChannel
 	return &TSMaster{
@@ -380,7 +380,7 @@ func NewTSMasterWithMapping(cfg Config, deviceType int, mapping TSMasterMapping)
 	}
 }
 
-func (t *TSMaster) Init() error {
+func (t *TSMaster) initialize() error {
 	t.lifecycle.opMu.Lock()
 	defer t.lifecycle.opMu.Unlock()
 	if t.lifecycle.isInitialized() {
@@ -405,7 +405,7 @@ func (t *TSMaster) Init() error {
 	t.ctx, t.cancel = context.WithCancel(context.Background())
 
 	// 初始化接收通道
-	t.rxChan = make(chan CanFrame, cfg.RxBufferSize)
+	t.rxChan = make(chan frame, cfg.RxBufferSize)
 	t.fanout = newRxFanout(t.ctx, t.rxChan, t.resetTelemetryWith(cfg))
 
 	cleanup := func(err error) error {
@@ -567,17 +567,11 @@ func (t *TSMaster) Init() error {
 	return nil
 }
 
-func (t *TSMaster) Start() {
-	if err := t.StartWithError(); err != nil {
-		logf(t.cfg, "TSMaster start failed: %v", err)
-	}
-}
-
-func (t *TSMaster) StartWithError() error {
+func (t *TSMaster) start() error {
 	t.lifecycle.opMu.Lock()
 	defer t.lifecycle.opMu.Unlock()
 	if !t.lifecycle.isInitialized() || !t.isConnected {
-		return fmt.Errorf("%w: TSMaster", ErrDriverNotInitialized)
+		return fmt.Errorf("%w: TSMaster", ErrDeviceNotInitialized)
 	}
 	if t.lifecycle.start(t.readLoop) {
 	}
@@ -633,7 +627,7 @@ func (t *TSMaster) readLoop() {
 					direction = TX
 					directionLabel = "TX"
 				}
-				unifiedMsg := CanFrame{
+				unifiedMsg := frame{
 					Direction: direction, ID: uint32(msg.FIdentifier), DLC: msg.FDLC, Data: msg.FData, FD: msg.FFDProperties&tsCANFDPropertyEDL != 0, BRS: msg.FFDProperties&tsCANFDPropertyBRS != 0,
 					TimestampUS: tsmasterTimestampUS(msg.FTimeUs),
 				}
@@ -657,7 +651,7 @@ func tsmasterTimestampUS(timestamp int64) uint64 {
 	return uint64(timestamp)
 }
 
-func (t *TSMaster) Stop() {
+func (t *TSMaster) stop() {
 	t.lifecycle.opMu.Lock()
 	defer t.lifecycle.opMu.Unlock()
 	wasInitialized := t.lifecycle.cancelAndWait(t.cancel)
@@ -690,7 +684,7 @@ func (t *TSMaster) Stop() {
 	t.closeTelemetry()
 }
 
-func (t *TSMaster) Write(id int32, fd bool, data []byte) error {
+func (t *TSMaster) write(id int32, fd bool, data []byte) error {
 	t.lifecycle.opMu.Lock()
 	defer t.lifecycle.opMu.Unlock()
 	if !t.lifecycle.isInitialized() {
@@ -725,16 +719,7 @@ func (t *TSMaster) Write(id int32, fd bool, data []byte) error {
 	return nil
 }
 
-func (t *TSMaster) RxChan() <-chan CanFrame {
-	t.lifecycle.opMu.Lock()
-	defer t.lifecycle.opMu.Unlock()
-	if t.fanout == nil {
-		return nil
-	}
-	return t.fanout.Default(t.cfg.RxBufferSize)
-}
-
-func (t *TSMaster) SubscribeRx(buffer int) (<-chan CanFrame, func()) {
+func (t *TSMaster) subscribe(buffer int) (<-chan frame, func()) {
 	t.lifecycle.opMu.Lock()
 	defer t.lifecycle.opMu.Unlock()
 	if t.fanout == nil {
@@ -743,25 +728,25 @@ func (t *TSMaster) SubscribeRx(buffer int) (<-chan CanFrame, func()) {
 	return t.fanout.Subscribe(buffer)
 }
 
-func (t *TSMaster) IsFDMode() bool {
+func (t *TSMaster) isFD() bool {
 	t.lifecycle.opMu.Lock()
 	defer t.lifecycle.opMu.Unlock()
 	return t.canType == CANFD
 }
 
-func (t *TSMaster) Config() Config {
+func (t *TSMaster) config() config {
 	t.lifecycle.opMu.Lock()
 	defer t.lifecycle.opMu.Unlock()
 	return t.cfg
 }
 
 // BusLoad returns TSMaster's native CAN bus-load statistic. The API reports a
-// percentage (0..100), while BusLoadInfo.Load is normalized to 0..1.
-func (t *TSMaster) BusLoad() BusLoadInfo {
+// percentage (0..100), while busLoadSnapshot.Load is normalized to 0..1.
+func (t *TSMaster) busLoad() busLoadSnapshot {
 	t.lifecycle.opMu.Lock()
 	defer t.lifecycle.opMu.Unlock()
 
-	info := BusLoadInfo{
+	info := busLoadSnapshot{
 		Window:         defaultBusLoadWindow,
 		NominalBitrate: t.cfg.NominalBitrate,
 		DataBitrate:    t.cfg.DataBitrate,
@@ -795,13 +780,13 @@ func normalizeTSMasterBusLoad(percent float64) float64 {
 	return percent / 100
 }
 
-func (t *TSMaster) SetBRS(enabled bool) {
+func (t *TSMaster) setBRS(enabled bool) {
 	t.lifecycle.opMu.Lock()
 	defer t.lifecycle.opMu.Unlock()
 	t.cfg.BRS = enabled
 }
 
-func (t *TSMaster) BRS() bool {
+func (t *TSMaster) brs() bool {
 	t.lifecycle.opMu.Lock()
 	defer t.lifecycle.opMu.Unlock()
 	return t.cfg.BRS

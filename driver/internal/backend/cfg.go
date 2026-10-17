@@ -1,12 +1,12 @@
-package driver
+package backend
 
 import "fmt"
 
-func normalizeConfig(cfg Config) (Config, error) {
+func normalizeConfig(cfg config) (config, error) {
 	return cfg.Normalized()
 }
 
-func validateWrite(cfg Config, id int32, fd bool, data []byte) error {
+func validateWrite(cfg config, id int32, fd bool, data []byte) error {
 	if id < 0 || id > 0x7FF {
 		return fmt.Errorf("standard CAN ID 0x%X out of range (0x000-0x7FF)", id)
 	}

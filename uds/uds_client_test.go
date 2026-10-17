@@ -15,7 +15,7 @@ import (
 // Mock 实现
 // ============================================================================
 
-// MockCANDriver 是 CANDriver 接口的 Mock 实现
+// MockCANDriver is a test implementation of can.Driver.
 type MockCANDriver struct {
 	mu        sync.Mutex
 	rxChan    chan can.Frame

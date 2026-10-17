@@ -5,8 +5,7 @@ package canalystii
 
 import (
 	"github.com/LoveWonYoung/canbuskit/v2/can"
-	"github.com/LoveWonYoung/canbuskit/v2/driver/internal/adapter"
-	legacy "github.com/LoveWonYoung/canbuskit/v2/internal/windriver"
+	"github.com/LoveWonYoung/canbuskit/v2/driver/internal/backend"
 )
 
 type Options struct {
@@ -18,5 +17,5 @@ func New(cfg can.Config, options Options) can.Driver {
 	if options.DeviceType == 0 {
 		options.DeviceType = 4 // VCI_USBCAN2
 	}
-	return adapter.Wrap(legacy.NewCanalystIIWithDevice(cfg, options.DeviceType, options.DeviceIndex))
+	return backend.CanalystIIBus(cfg, options.DeviceType, options.DeviceIndex)
 }

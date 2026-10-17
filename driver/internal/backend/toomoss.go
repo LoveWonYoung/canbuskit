@@ -1,6 +1,6 @@
 //go:build windows
 
-package driver
+package backend
 
 import (
 	"context"
@@ -550,24 +550,24 @@ func BuildCANFDInitConfig(timing CANFDInitConfig) CANFD_INIT_CONFIG {
 
 type Toomoss struct {
 	driverObservability
-	rxChan          chan CanFrame
+	rxChan          chan frame
 	fanout          *rxFanout
 	ctx             context.Context
 	cancel          context.CancelFunc
-	cfg             Config
+	cfg             config
 	lifecycle       driverLifecycle
-	canType         CanType
+	canType         mode
 	CANChannel      byte
 	legacyCAN       bool
 	canFDInitConfig CANFD_INIT_CONFIG
 	ownsDevice      bool
 }
 
-func NewToomoss(canType CanType, canChannel byte) *Toomoss {
-	return NewToomossWithConfig(DefaultConfig(canType, canChannel))
+func NewToomoss(canType mode, canChannel byte) *Toomoss {
+	return NewToomossWithConfig(defaultConfig(canType, canChannel))
 }
 
-func NewToomossWithConfig(cfg Config) *Toomoss {
+func NewToomossWithConfig(cfg config) *Toomoss {
 	ctx, cancel := context.WithCancel(context.Background())
 	return &Toomoss{
 		ctx:             ctx,
@@ -642,7 +642,7 @@ func toomossDLCToDataLen(rawDLC byte, isFD bool) int {
 	return actualLen
 }
 
-func (t *Toomoss) Init() error {
+func (t *Toomoss) initialize() error {
 	t.lifecycle.opMu.Lock()
 	defer t.lifecycle.opMu.Unlock()
 	if t.lifecycle.isInitialized() {
@@ -750,7 +750,7 @@ func (t *Toomoss) Init() error {
 
 func (t *Toomoss) prepareRuntime() {
 	t.ctx, t.cancel = context.WithCancel(context.Background())
-	t.rxChan = make(chan CanFrame, t.cfg.RxBufferSize)
+	t.rxChan = make(chan frame, t.cfg.RxBufferSize)
 	t.fanout = newRxFanout(t.ctx, t.rxChan, t.resetTelemetryWith(t.cfg))
 }
 
@@ -820,17 +820,11 @@ func (t *Toomoss) initLegacyCANDevice() error {
 	return nil
 }
 
-func (t *Toomoss) Start() {
-	if err := t.StartWithError(); err != nil {
-		logf(t.cfg, "Toomoss start failed: %v", err)
-	}
-}
-
-func (t *Toomoss) StartWithError() error {
+func (t *Toomoss) start() error {
 	t.lifecycle.opMu.Lock()
 	defer t.lifecycle.opMu.Unlock()
 	if !t.lifecycle.isInitialized() {
-		return fmt.Errorf("%w: Toomoss", ErrDriverNotInitialized)
+		return fmt.Errorf("%w: Toomoss", ErrDeviceNotInitialized)
 	}
 	t.drainInitialBuffer()
 	if t.lifecycle.start(t.readLoop) {
@@ -839,7 +833,7 @@ func (t *Toomoss) StartWithError() error {
 	return nil
 }
 
-func (t *Toomoss) Stop() {
+func (t *Toomoss) stop() {
 	t.lifecycle.opMu.Lock()
 	defer t.lifecycle.opMu.Unlock()
 	logf(t.cfg, "正在停止CAN-FD驱动的读取服务...")
@@ -909,7 +903,7 @@ func (t *Toomoss) readLoop() {
 					direction = TX
 					directionLabel = "TX"
 				}
-				unifiedMsg := CanFrame{
+				unifiedMsg := frame{
 					Direction: direction, ID: id, DLC: normalizedDLC, Data: msg.Data, FD: isFD,
 					BRS:         isFD && brs,
 					TimestampUS: toomossTimestampUS(msg.TimeStampHigh, msg.TimeStamp, 10),
@@ -981,7 +975,7 @@ func (t *Toomoss) readClassicBurst(canMsg *[MsgBufferSize]CAN_MSG) {
 		if actualLen > 0 {
 			copy(data[:], msg.Data[:actualLen])
 		}
-		unifiedMsg := CanFrame{
+		unifiedMsg := frame{
 			Direction:   direction,
 			ID:          id,
 			DLC:         dataLenToDlc(actualLen),
@@ -1034,7 +1028,7 @@ func (t *Toomoss) drainInitialBuffer() {
 	logf(t.cfg, "Toomoss initial CAN-FD queue still contains frames after 16 batches")
 }
 
-func (t *Toomoss) Write(id int32, fd bool, data []byte) error {
+func (t *Toomoss) write(id int32, fd bool, data []byte) error {
 	t.lifecycle.opMu.Lock()
 	defer t.lifecycle.opMu.Unlock()
 	if !t.lifecycle.isInitialized() {
@@ -1121,16 +1115,7 @@ func (t *Toomoss) writeClassicCAN(id int32, fd bool, data []byte) error {
 	return nil
 }
 
-func (t *Toomoss) RxChan() <-chan CanFrame {
-	t.lifecycle.opMu.Lock()
-	defer t.lifecycle.opMu.Unlock()
-	if t.fanout == nil {
-		return nil
-	}
-	return t.fanout.Default(t.cfg.RxBufferSize)
-}
-
-func (t *Toomoss) SubscribeRx(buffer int) (<-chan CanFrame, func()) {
+func (t *Toomoss) subscribe(buffer int) (<-chan frame, func()) {
 	t.lifecycle.opMu.Lock()
 	defer t.lifecycle.opMu.Unlock()
 	if t.fanout == nil {
@@ -1139,25 +1124,25 @@ func (t *Toomoss) SubscribeRx(buffer int) (<-chan CanFrame, func()) {
 	return t.fanout.Subscribe(buffer)
 }
 
-func (t *Toomoss) IsFDMode() bool {
+func (t *Toomoss) isFD() bool {
 	t.lifecycle.opMu.Lock()
 	defer t.lifecycle.opMu.Unlock()
 	return t.canType == CANFD
 }
 
-func (t *Toomoss) Config() Config {
+func (t *Toomoss) config() config {
 	t.lifecycle.opMu.Lock()
 	defer t.lifecycle.opMu.Unlock()
 	return t.cfg
 }
 
-func (t *Toomoss) SetBRS(enabled bool) {
+func (t *Toomoss) setBRS(enabled bool) {
 	t.lifecycle.opMu.Lock()
 	defer t.lifecycle.opMu.Unlock()
 	t.cfg.BRS = enabled
 }
 
-func (t *Toomoss) BRS() bool {
+func (t *Toomoss) brs() bool {
 	t.lifecycle.opMu.Lock()
 	defer t.lifecycle.opMu.Unlock()
 	return t.cfg.BRS

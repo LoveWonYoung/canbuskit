@@ -1,6 +1,6 @@
 //go:build windows
 
-package driver
+package backend
 
 import (
 	"bytes"
@@ -41,7 +41,7 @@ func TestCanalystTimestampUS(t *testing.T) {
 func TestPCANEchoLogUsesRelativeHardwareTimes(t *testing.T) {
 	var output bytes.Buffer
 
-	driver := &PCAN{cfg: Config{IncludeTxEcho: false, Logger: slog.New(slog.NewTextHandler(&output, nil))}}
+	driver := &PCAN{cfg: config{IncludeTxEcho: false, Logger: slog.New(slog.NewTextHandler(&output, nil))}}
 	driver.enqueueMessage(0x123, 1, []byte{0xAA}, pcanMessageEcho, 1_002_003)
 	driver.enqueueMessage(0x123, 1, []byte{0xBB}, pcanMessageEcho, 1_003_507)
 

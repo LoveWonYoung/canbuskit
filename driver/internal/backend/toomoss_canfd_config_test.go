@@ -1,6 +1,6 @@
 //go:build windows
 
-package driver
+package backend
 
 import "testing"
 
@@ -37,11 +37,11 @@ func TestToomossSetCANFDTiming(t *testing.T) {
 
 func TestToomossSetBRS(t *testing.T) {
 	drv := NewToomoss(CANFD, CHANNEL1)
-	if drv.BRS() {
+	if drv.brs() {
 		t.Fatal("BRS must be off by default")
 	}
-	drv.SetBRS(true)
-	if !drv.BRS() || !drv.Config().BRS {
+	drv.setBRS(true)
+	if !drv.brs() || !drv.config().BRS {
 		t.Fatal("SetBRS(true) did not enable BRS")
 	}
 }

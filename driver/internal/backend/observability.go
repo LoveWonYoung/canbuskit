@@ -1,4 +1,4 @@
-package driver
+package backend
 
 import (
 	"context"
@@ -12,20 +12,6 @@ var closedDriverErrors = func() <-chan error {
 	close(ch)
 	return ch
 }()
-
-// ObservableCANDriver is an optional extension implemented by the built-in
-// drivers. Existing third-party CANDriver implementations remain compatible.
-type ObservableCANDriver interface {
-	Errors() <-chan error
-	Stats() DriverStats
-	BusLoad() BusLoadInfo
-}
-
-// RxSubscriber is an optional extension that lets callers release a receive
-// subscription before the driver itself is stopped.
-type RxSubscriber interface {
-	SubscribeRx(buffer int) (<-chan CanFrame, func())
-}
 
 type driverTelemetry struct {
 	mu                sync.Mutex
@@ -57,19 +43,19 @@ func (t *driverTelemetry) report(err error) {
 
 func (t *driverTelemetry) reportSourceDrop() {
 	count := t.sourceDropped.Add(1)
-	t.report(&ReceiveOverflowError{Stage: "driver-source", Dropped: count})
+	t.report(&receiveOverflowError{Stage: "driver-source", Dropped: count})
 }
 
 func (t *driverTelemetry) reportSubscriberDrop() {
 	count := t.subscriberDropped.Add(1)
-	t.report(&ReceiveOverflowError{Stage: "subscriber", Dropped: count})
+	t.report(&receiveOverflowError{Stage: "subscriber", Dropped: count})
 }
 
-func (t *driverTelemetry) stats() DriverStats {
+func (t *driverTelemetry) stats() driverStats {
 	if t == nil {
-		return DriverStats{}
+		return driverStats{}
 	}
-	return DriverStats{
+	return driverStats{
 		SourceDropped:     t.sourceDropped.Load(),
 		SubscriberDropped: t.subscriberDropped.Load(),
 	}
@@ -92,7 +78,7 @@ func (t *driverTelemetry) close() {
 type driverObservability struct {
 	mu               sync.RWMutex
 	telemetry        *driverTelemetry
-	busLoad          busLoadMeter
+	loadMeter        busLoadMeter
 	relativeLogClock relativeLogClock
 }
 
@@ -111,9 +97,9 @@ func (o *driverObservability) resetTelemetry() *driverTelemetry {
 	return o.telemetry
 }
 
-func (o *driverObservability) resetTelemetryWith(cfg Config) *driverTelemetry {
+func (o *driverObservability) resetTelemetryWith(cfg config) *driverTelemetry {
 	t := o.resetTelemetry()
-	o.busLoad.configure(cfg)
+	o.loadMeter.configure(cfg)
 	o.relativeLogClock.reset()
 	return t
 }
@@ -138,32 +124,32 @@ func (o *driverObservability) currentTelemetry() *driverTelemetry {
 	return o.telemetry
 }
 
-func (o *driverObservability) Errors() <-chan error {
+func (o *driverObservability) errors() <-chan error {
 	return o.currentTelemetry().errors
 }
 
-func (o *driverObservability) Stats() DriverStats {
+func (o *driverObservability) stats() driverStats {
 	return o.currentTelemetry().stats()
 }
 
-func (o *driverObservability) BusLoad() BusLoadInfo {
-	return o.busLoad.snapshot(time.Now())
+func (o *driverObservability) busLoad() busLoadSnapshot {
+	return o.loadMeter.snapshot(time.Now())
 }
 
 func (o *driverObservability) recordBusTx(id int32, fd, brs bool, data []byte) {
-	o.busLoad.recordTx(id, fd, brs, data, time.Now())
+	o.loadMeter.recordTx(id, fd, brs, data, time.Now())
 }
 
-func (o *driverObservability) observeBusFrame(frame CanFrame) {
+func (o *driverObservability) observeBusFrame(frame frame) {
 	o.observeBusFrameWithWrap(frame, 0)
 }
 
-func (o *driverObservability) observeBusFrameWithWrap(frame CanFrame, wrapPeriodUS uint64) {
-	o.busLoad.observeWithWrap(frame, time.Now(), wrapPeriodUS)
+func (o *driverObservability) observeBusFrameWithWrap(frame frame, wrapPeriodUS uint64) {
+	o.loadMeter.observeWithWrap(frame, time.Now(), wrapPeriodUS)
 }
 
-func (o *driverObservability) observeBusFrameWithBitCount(frame CanFrame, totalBitCount uint16) {
-	o.busLoad.observeWithBitCount(frame, totalBitCount, time.Now(), 0)
+func (o *driverObservability) observeBusFrameWithBitCount(frame frame, totalBitCount uint16) {
+	o.loadMeter.observeWithBitCount(frame, totalBitCount, time.Now(), 0)
 }
 
 func (o *driverObservability) closeTelemetry() {
@@ -173,21 +159,21 @@ func (o *driverObservability) closeTelemetry() {
 	current.close()
 }
 
-func (o *driverObservability) publishRx(ctx context.Context, destination chan<- CanFrame, frame CanFrame) bool {
+func (o *driverObservability) publishRx(ctx context.Context, destination chan<- frame, frame frame) bool {
 	return o.publishRxWithWrap(ctx, destination, frame, 0)
 }
 
-func (o *driverObservability) publishRxWithWrap(ctx context.Context, destination chan<- CanFrame, frame CanFrame, wrapPeriodUS uint64) bool {
+func (o *driverObservability) publishRxWithWrap(ctx context.Context, destination chan<- frame, frame frame, wrapPeriodUS uint64) bool {
 	o.observeBusFrameWithWrap(frame, wrapPeriodUS)
 	return o.publishObservedRx(ctx, destination, frame)
 }
 
-func (o *driverObservability) publishRxWithBitCount(ctx context.Context, destination chan<- CanFrame, frame CanFrame, totalBitCount uint16) bool {
+func (o *driverObservability) publishRxWithBitCount(ctx context.Context, destination chan<- frame, frame frame, totalBitCount uint16) bool {
 	o.observeBusFrameWithBitCount(frame, totalBitCount)
 	return o.publishObservedRx(ctx, destination, frame)
 }
 
-func (o *driverObservability) publishObservedRx(ctx context.Context, destination chan<- CanFrame, frame CanFrame) bool {
+func (o *driverObservability) publishObservedRx(ctx context.Context, destination chan<- frame, frame frame) bool {
 	select {
 	case <-ctx.Done():
 		return false
