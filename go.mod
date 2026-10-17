@@ -1,4 +1,4 @@
-module github.com/LoveWonYoung/canbuskit
+module github.com/LoveWonYoung/canbuskit/v2
 
 go 1.25.4
 

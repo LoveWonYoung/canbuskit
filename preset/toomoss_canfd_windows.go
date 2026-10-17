@@ -5,7 +5,7 @@ package preset
 import (
 	"fmt"
 
-	"github.com/LoveWonYoung/canbuskit/driver"
+	"github.com/LoveWonYoung/canbuskit/v2/driver"
 )
 
 func NewPresetToomossWithCANFDConfig(

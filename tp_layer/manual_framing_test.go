@@ -4,7 +4,7 @@ import (
 	"bytes"
 	"testing"
 
-	"github.com/LoveWonYoung/canbuskit/tp_layer"
+	"github.com/LoveWonYoung/canbuskit/v2/tp_layer"
 )
 
 func TestExportedManualFrameEncoders(t *testing.T) {

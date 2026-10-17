@@ -7,8 +7,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/LoveWonYoung/canbuskit/driver"
-	"github.com/LoveWonYoung/canbuskit/tp_layer"
+	"github.com/LoveWonYoung/canbuskit/v2/driver"
+	"github.com/LoveWonYoung/canbuskit/v2/tp_layer"
 )
 
 type presetMockDriver struct {

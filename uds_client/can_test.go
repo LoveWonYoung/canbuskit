@@ -3,7 +3,7 @@ package uds_client
 import (
 	"testing"
 
-	"github.com/LoveWonYoung/canbuskit/driver"
+	"github.com/LoveWonYoung/canbuskit/v2/driver"
 )
 
 func TestConvertRXMessageDropsTXEchoAndNonStandardID(t *testing.T) {
