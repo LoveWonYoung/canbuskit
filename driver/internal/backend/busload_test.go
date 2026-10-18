@@ -1,12 +1,13 @@
 package backend
 
 import (
+	"github.com/LoveWonYoung/canbuskit/v2/can"
 	"testing"
 	"time"
 )
 
 func TestClassicCANFrameBitsIncludesIFS(t *testing.T) {
-	frame := frame{ID: 0x155, DLC: 2, Data: [64]byte{0x55, 0xAA}}
+	frame := can.Frame{ID: 0x155, DLC: 2, Data: [64]byte{0x55, 0xAA}}
 	got := classicCANFrameBits(frame)
 	unstuffed := 47 + 8*2
 	if got < unstuffed {
@@ -18,7 +19,7 @@ func TestClassicCANFrameBitsIncludesIFS(t *testing.T) {
 }
 
 func TestClassicCANFrameBitsStuffsLongZeroRuns(t *testing.T) {
-	empty := classicCANFrameBits(frame{ID: 0, DLC: 0})
+	empty := classicCANFrameBits(can.Frame{ID: 0, DLC: 0})
 	if empty <= 47 {
 		t.Fatalf("zero ID empty frame = %d bits, want stuffing above 47", empty)
 	}
@@ -27,7 +28,7 @@ func TestClassicCANFrameBitsStuffsLongZeroRuns(t *testing.T) {
 func TestClassicCANFrameBitsMatchesReferenceImplementation(t *testing.T) {
 	for id := uint32(0); id <= 0x7FF; id += 37 {
 		for dlc := byte(0); dlc <= 8; dlc++ {
-			frame := frame{ID: id, DLC: dlc}
+			frame := can.Frame{ID: id, DLC: dlc}
 			for i := range frame.Data {
 				frame.Data[i] = byte(uint32(i)*29 + id)
 			}
@@ -39,13 +40,13 @@ func TestClassicCANFrameBitsMatchesReferenceImplementation(t *testing.T) {
 }
 
 func TestClassicCANFrameBitsDoesNotAllocate(t *testing.T) {
-	frame := frame{ID: 0x123, DLC: 8, Data: [64]byte{1, 2, 3, 4, 5, 6, 7, 8}}
+	frame := can.Frame{ID: 0x123, DLC: 8, Data: [64]byte{1, 2, 3, 4, 5, 6, 7, 8}}
 	if allocs := testing.AllocsPerRun(1000, func() { _ = classicCANFrameBits(frame) }); allocs != 0 {
 		t.Fatalf("classicCANFrameBits allocated %.1f objects per call", allocs)
 	}
 }
 
-func referenceClassicCANFrameBits(frame frame) int {
+func referenceClassicCANFrameBits(frame can.Frame) int {
 	bits := make([]byte, 0, 98)
 	appendBits := func(value uint32, n int) {
 		for i := n - 1; i >= 0; i-- {
@@ -90,7 +91,7 @@ func referenceClassicCANFrameBits(frame frame) int {
 }
 
 func TestCANFDFrameBitsMatchesISOReference(t *testing.T) {
-	frame := frame{ID: 0x100, DLC: 8, FD: true, Data: [64]byte{1, 2, 3, 4, 5, 6, 7, 8}}
+	frame := can.Frame{ID: 0x100, DLC: 8, FD: true, Data: [64]byte{1, 2, 3, 4, 5, 6, 7, 8}}
 	for _, brs := range []bool{false, true} {
 		frame.BRS = brs
 		gotArb, gotData := canFDFrameBits(frame)
@@ -105,7 +106,7 @@ func TestCANFDFrameBitsMatchesReferenceAcrossPayloads(t *testing.T) {
 	for id := uint32(0); id <= 0x7FF; id += 113 {
 		for dlc := byte(0); dlc <= 15; dlc++ {
 			for _, brs := range []bool{false, true} {
-				frame := frame{ID: id, DLC: dlc, FD: true, BRS: brs}
+				frame := can.Frame{ID: id, DLC: dlc, FD: true, BRS: brs}
 				for i := range frame.Data {
 					frame.Data[i] = byte(uint32(i)*37 + id + uint32(dlc)*11)
 				}
@@ -120,7 +121,7 @@ func TestCANFDFrameBitsMatchesReferenceAcrossPayloads(t *testing.T) {
 }
 
 func TestCANFDFrameBitsUsesActualPayloadForStuffing(t *testing.T) {
-	zeros := frame{ID: 0x123, DLC: 15, FD: true, BRS: true}
+	zeros := can.Frame{ID: 0x123, DLC: 15, FD: true, BRS: true}
 	alternating := zeros
 	for i := 0; i < alternating.DataLength(); i++ {
 		alternating.Data[i] = 0xAA
@@ -133,15 +134,15 @@ func TestCANFDFrameBitsUsesActualPayloadForStuffing(t *testing.T) {
 }
 
 func TestCANFDFrameBitsDoesNotAllocate(t *testing.T) {
-	frame := frame{ID: 0x123, DLC: 15, FD: true, BRS: true}
+	frame := can.Frame{ID: 0x123, DLC: 15, FD: true, BRS: true}
 	if allocs := testing.AllocsPerRun(1000, func() { _, _ = canFDFrameBits(frame) }); allocs != 0 {
 		t.Fatalf("canFDFrameBits allocated %.1f objects per call", allocs)
 	}
 }
 
 func TestCANFDCRCLength(t *testing.T) {
-	short := frame{ID: 0x100, DLC: 10, FD: true} // 16 bytes, CRC-17
-	long := frame{ID: 0x100, DLC: 11, FD: true}  // 20 bytes, CRC-21
+	short := can.Frame{ID: 0x100, DLC: 10, FD: true} // 16 bytes, CRC-17
+	long := can.Frame{ID: 0x100, DLC: 11, FD: true}  // 20 bytes, CRC-21
 	shortBits, _ := canFDFrameBits(short)
 	longBits, _ := canFDFrameBits(long)
 	if longBits <= shortBits {
@@ -150,7 +151,7 @@ func TestCANFDCRCLength(t *testing.T) {
 }
 
 func TestCANFDFrameBitsWithBRSUsesDataPhase(t *testing.T) {
-	frame := frame{ID: 0x100, DLC: 8, FD: true, BRS: true, Data: [64]byte{1, 2, 3, 4, 5, 6, 7, 8}}
+	frame := can.Frame{ID: 0x100, DLC: 8, FD: true, BRS: true, Data: [64]byte{1, 2, 3, 4, 5, 6, 7, 8}}
 	arb, data := canFDFrameBits(frame)
 	if data == 0 {
 		t.Fatal("expected data-phase bits when BRS is set")
@@ -158,7 +159,7 @@ func TestCANFDFrameBitsWithBRSUsesDataPhase(t *testing.T) {
 	if arb == 0 {
 		t.Fatal("expected arbitration-phase bits when BRS is set")
 	}
-	noBRS := frame{ID: 0x100, DLC: 15, FD: true}
+	noBRS := can.Frame{ID: 0x100, DLC: 15, FD: true}
 	withBRS := noBRS
 	withBRS.BRS = true
 	slow := frameOccupancy(noBRS, 500_000, 2_000_000)
@@ -168,7 +169,7 @@ func TestCANFDFrameBitsWithBRSUsesDataPhase(t *testing.T) {
 	}
 }
 
-func referenceCANFDFrameBits(frame frame) (arbBits, dataBits int) {
+func referenceCANFDFrameBits(frame can.Frame) (arbBits, dataBits int) {
 	type phasedBit struct {
 		value byte
 		data  bool
@@ -237,7 +238,7 @@ func referenceCANFDFrameBits(frame frame) (arbBits, dataBits int) {
 }
 
 func TestFrameOccupancyFromBitCountClassic(t *testing.T) {
-	frame := frame{ID: 0x123, DLC: 8}
+	frame := can.Frame{ID: 0x123, DLC: 8}
 	got := frameOccupancyFromBitCount(frame, 103, 500_000, 2_000_000)
 	if want := 206 * time.Microsecond; got != want {
 		t.Fatalf("frameOccupancyFromBitCount() = %s, want %s", got, want)
@@ -245,7 +246,7 @@ func TestFrameOccupancyFromBitCountClassic(t *testing.T) {
 }
 
 func TestFrameOccupancyFromBitCountBRSUsesBothBitrates(t *testing.T) {
-	frame := frame{ID: 0x123, DLC: 15, FD: true, BRS: true}
+	frame := can.Frame{ID: 0x123, DLC: 15, FD: true, BRS: true}
 	got := frameOccupancyFromBitCount(frame, 600, 500_000, 2_000_000)
 	allNominal := bitsToDuration(600, 500_000)
 	allData := bitsToDuration(600, 2_000_000)
@@ -256,9 +257,9 @@ func TestFrameOccupancyFromBitCountBRSUsesBothBitrates(t *testing.T) {
 
 func TestBusLoadUsesHardwareBitCount(t *testing.T) {
 	var meter busLoadMeter
-	meter.configure(config{NominalBitrate: 500_000, DataBitrate: 2_000_000})
+	meter.configure(can.Config{NominalBitrate: 500_000, DataBitrate: 2_000_000})
 	now := time.Unix(0, 0)
-	frame := frame{Direction: RX, ID: 0x123, DLC: 8, TimestampUS: 1_000_000}
+	frame := can.Frame{Direction: can.Receive, ID: 0x123, DLC: 8, TimestampUS: 1_000_000}
 	meter.observeWithBitCount(frame, 100, now, 0)
 
 	got := meter.snapshot(now.Add(time.Second))
@@ -270,11 +271,11 @@ func TestBusLoadUsesHardwareBitCount(t *testing.T) {
 
 func TestBusLoadMovesTxToHardwareBitCount(t *testing.T) {
 	var meter busLoadMeter
-	meter.configure(config{NominalBitrate: 500_000, DataBitrate: 2_000_000})
+	meter.configure(can.Config{NominalBitrate: 500_000, DataBitrate: 2_000_000})
 	now := time.Unix(0, 0)
-	meter.recordTx(0x123, false, false, make([]byte, 8), now)
-	meter.observeWithBitCount(frame{
-		Direction: TX, ID: 0x123, DLC: 8, TimestampUS: 1_000_000,
+	meter.recordTx(txFrame(0x123, make([]byte, 8)), now)
+	meter.observeWithBitCount(can.Frame{
+		Direction: can.Transmit, ID: 0x123, DLC: 8, TimestampUS: 1_000_000,
 	}, 100, now.Add(time.Millisecond), 0)
 
 	var hostOccupied, hardwareOccupied uint64
@@ -292,11 +293,11 @@ func TestBusLoadMovesTxToHardwareBitCount(t *testing.T) {
 
 func TestBusLoadWindowOccupancy(t *testing.T) {
 	var meter busLoadMeter
-	meter.configure(config{NominalBitrate: 500_000, DataBitrate: 2_000_000})
+	meter.configure(can.Config{NominalBitrate: 500_000, DataBitrate: 2_000_000})
 
 	now := time.Unix(0, 0)
-	frame := frame{ID: 0x155, DLC: 0}
-	meter.recordTx(0x155, false, false, nil, now)
+	frame := can.Frame{ID: 0x155, DLC: 0}
+	meter.recordTx(txFrame(0x155, nil), now)
 
 	got := meter.snapshot(now.Add(time.Second))
 	if got.FrameCount != 1 {
@@ -313,20 +314,20 @@ func TestBusLoadWindowOccupancy(t *testing.T) {
 
 func TestBusLoadDedupsTxEcho(t *testing.T) {
 	var meter busLoadMeter
-	meter.configure(config{NominalBitrate: 500_000})
+	meter.configure(can.Config{NominalBitrate: 500_000})
 	now := time.Unix(0, 0)
 	data := []byte{0x11, 0x22}
 
-	meter.recordTx(0x123, false, false, data, now)
-	meter.observe(frame{Direction: TX, ID: 0x123, DLC: 2, Data: [64]byte{0x11, 0x22}}, now.Add(time.Millisecond))
-	meter.observe(frame{Direction: RX, ID: 0x123, DLC: 2, Data: [64]byte{0x11, 0x22}}, now.Add(2*time.Millisecond))
+	meter.recordTx(txFrame(0x123, data), now)
+	meter.observe(can.Frame{Direction: can.Transmit, ID: 0x123, DLC: 2, Data: [64]byte{0x11, 0x22}}, now.Add(time.Millisecond))
+	meter.observe(can.Frame{Direction: can.Receive, ID: 0x123, DLC: 2, Data: [64]byte{0x11, 0x22}}, now.Add(2*time.Millisecond))
 
 	got := meter.snapshot(now.Add(time.Second))
 	if got.FrameCount != 1 {
 		t.Fatalf("FrameCount = %d, want 1 after TX echo", got.FrameCount)
 	}
 
-	meter.observe(frame{Direction: RX, ID: 0x200, DLC: 0}, now.Add(3*time.Millisecond))
+	meter.observe(can.Frame{Direction: can.Receive, ID: 0x200, DLC: 0}, now.Add(3*time.Millisecond))
 	got = meter.snapshot(now.Add(time.Second))
 	if got.FrameCount != 2 {
 		t.Fatalf("FrameCount = %d, want 2 after unrelated RX", got.FrameCount)
@@ -334,10 +335,10 @@ func TestBusLoadDedupsTxEcho(t *testing.T) {
 }
 
 func TestDriverObservabilityBusLoad(t *testing.T) {
-	var observable driverObservability
-	observable.resetTelemetryWith(config{NominalBitrate: 500_000, DataBitrate: 2_000_000})
-	observable.recordBusTx(0x100, false, false, []byte{0x01})
-	observable.observeBusFrame(frame{Direction: RX, ID: 0x200, DLC: 0})
+	var observable observability
+	observable.prepare(can.Config{NominalBitrate: 500_000, DataBitrate: 2_000_000})
+	observable.recordBusTx(can.Frame{ID: 0x100, DLC: 1, Data: [64]byte{0x01}})
+	observable.observeBusFrame(can.Frame{Direction: can.Receive, ID: 0x200, DLC: 0})
 
 	got := observable.busLoad()
 	if got.FrameCount != 2 {
@@ -350,11 +351,11 @@ func TestDriverObservabilityBusLoad(t *testing.T) {
 
 func TestBusLoadUsesHardwareFrameTimes(t *testing.T) {
 	var meter busLoadMeter
-	meter.configure(config{NominalBitrate: 500_000})
+	meter.configure(can.Config{NominalBitrate: 500_000})
 	now := time.Unix(0, 0)
-	meter.observe(frame{Direction: RX, ID: 0x100, TimestampUS: 1_000_000}, now)
+	meter.observe(can.Frame{Direction: can.Receive, ID: 0x100, TimestampUS: 1_000_000}, now)
 	// Both frames reached the read loop together, but occurred 1.1 s apart on the bus.
-	meter.observe(frame{Direction: RX, ID: 0x101, TimestampUS: 2_100_000}, now)
+	meter.observe(can.Frame{Direction: can.Receive, ID: 0x101, TimestampUS: 2_100_000}, now)
 	if got := meter.snapshot(now).FrameCount; got != 1 {
 		t.Fatalf("FrameCount = %d, want only the recent hardware-timed frame", got)
 	}
@@ -362,10 +363,10 @@ func TestBusLoadUsesHardwareFrameTimes(t *testing.T) {
 
 func TestBusLoadStartupWindowUsesHardwareElapsedTime(t *testing.T) {
 	var meter busLoadMeter
-	meter.configure(config{NominalBitrate: 500_000})
+	meter.configure(can.Config{NominalBitrate: 500_000})
 	now := time.Unix(0, 0)
-	meter.observe(frame{Direction: RX, ID: 0x100, TimestampUS: 1_000_000}, now)
-	meter.observe(frame{Direction: RX, ID: 0x101, TimestampUS: 1_500_000}, now)
+	meter.observe(can.Frame{Direction: can.Receive, ID: 0x100, TimestampUS: 1_000_000}, now)
+	meter.observe(can.Frame{Direction: can.Receive, ID: 0x101, TimestampUS: 1_500_000}, now)
 	if got := meter.snapshot(now); got.Window != 500*time.Millisecond {
 		t.Fatalf("Window = %s, want 500ms from hardware timestamps", got.Window)
 	}
@@ -373,12 +374,12 @@ func TestBusLoadStartupWindowUsesHardwareElapsedTime(t *testing.T) {
 
 func TestBusLoadMovesTxToEchoTimestamp(t *testing.T) {
 	var meter busLoadMeter
-	meter.configure(config{NominalBitrate: 500_000})
+	meter.configure(can.Config{NominalBitrate: 500_000})
 	now := time.Unix(0, 0)
-	meter.observe(frame{Direction: RX, ID: 0x100, TimestampUS: 1_000_000}, now)
-	meter.recordTx(0x123, false, false, []byte{0x11}, now.Add(900*time.Millisecond))
-	meter.observe(frame{Direction: TX, ID: 0x123, DLC: 1, Data: [64]byte{0x11}, TimestampUS: 1_050_000}, now.Add(901*time.Millisecond))
-	meter.observe(frame{Direction: RX, ID: 0x200, TimestampUS: 2_000_000}, now.Add(950*time.Millisecond))
+	meter.observe(can.Frame{Direction: can.Receive, ID: 0x100, TimestampUS: 1_000_000}, now)
+	meter.recordTx(txFrame(0x123, []byte{0x11}), now.Add(900*time.Millisecond))
+	meter.observe(can.Frame{Direction: can.Transmit, ID: 0x123, DLC: 1, Data: [64]byte{0x11}, TimestampUS: 1_050_000}, now.Add(901*time.Millisecond))
+	meter.observe(can.Frame{Direction: can.Receive, ID: 0x200, TimestampUS: 2_000_000}, now.Add(950*time.Millisecond))
 	if got := meter.snapshot(now.Add(1100 * time.Millisecond)).FrameCount; got != 1 {
 		t.Fatalf("FrameCount = %d, want only the latest RX after the TX echo aged out", got)
 	}
@@ -386,11 +387,11 @@ func TestBusLoadMovesTxToEchoTimestamp(t *testing.T) {
 
 func TestBusLoadFallsBackWithoutHardwareTimestamp(t *testing.T) {
 	var meter busLoadMeter
-	meter.configure(config{NominalBitrate: 500_000})
+	meter.configure(can.Config{NominalBitrate: 500_000})
 	now := time.Unix(0, 0)
-	meter.recordTx(0x123, false, false, nil, now)
-	meter.observe(frame{Direction: TX, ID: 0x123}, now.Add(time.Millisecond))
-	meter.observe(frame{Direction: RX, ID: 0x200}, now.Add(2*time.Millisecond))
+	meter.recordTx(txFrame(0x123, nil), now)
+	meter.observe(can.Frame{Direction: can.Transmit, ID: 0x123}, now.Add(time.Millisecond))
+	meter.observe(can.Frame{Direction: can.Receive, ID: 0x200}, now.Add(2*time.Millisecond))
 	if got := meter.snapshot(now.Add(3 * time.Millisecond)).FrameCount; got != 2 {
 		t.Fatalf("FrameCount = %d, want TX and RX counted once with host timestamps", got)
 	}
@@ -398,10 +399,10 @@ func TestBusLoadFallsBackWithoutHardwareTimestamp(t *testing.T) {
 
 func TestBusLoadHardwareTimestampWrap(t *testing.T) {
 	var meter busLoadMeter
-	meter.configure(config{NominalBitrate: 500_000})
+	meter.configure(can.Config{NominalBitrate: 500_000})
 	now := time.Unix(0, 0)
-	meter.observeWithWrap(frame{Direction: RX, ID: 0x100, TimestampUS: 999_900}, now, 1_000_000)
-	meter.observeWithWrap(frame{Direction: RX, ID: 0x101, TimestampUS: 100}, now.Add(200*time.Microsecond), 1_000_000)
+	meter.observeWithWrap(can.Frame{Direction: can.Receive, ID: 0x100, TimestampUS: 999_900}, now, 1_000_000)
+	meter.observeWithWrap(can.Frame{Direction: can.Receive, ID: 0x101, TimestampUS: 100}, now.Add(200*time.Microsecond), 1_000_000)
 	if got := meter.snapshot(now.Add(200 * time.Microsecond)).FrameCount; got != 2 {
 		t.Fatalf("FrameCount = %d, want both frames across hardware clock wrap", got)
 	}
@@ -409,10 +410,10 @@ func TestBusLoadHardwareTimestampWrap(t *testing.T) {
 
 func TestBusLoadMatchesEchoBeforeWriteReturns(t *testing.T) {
 	var meter busLoadMeter
-	meter.configure(config{NominalBitrate: 500_000})
+	meter.configure(can.Config{NominalBitrate: 500_000})
 	now := time.Unix(0, 0)
-	meter.observe(frame{Direction: TX, ID: 0x123, DLC: 1, Data: [64]byte{0x11}, TimestampUS: 1_000_000}, now)
-	meter.recordTx(0x123, false, false, []byte{0x11}, now.Add(time.Millisecond))
+	meter.observe(can.Frame{Direction: can.Transmit, ID: 0x123, DLC: 1, Data: [64]byte{0x11}, TimestampUS: 1_000_000}, now)
+	meter.recordTx(txFrame(0x123, []byte{0x11}), now.Add(time.Millisecond))
 	if got := meter.snapshot(now.Add(2 * time.Millisecond)).FrameCount; got != 1 {
 		t.Fatalf("FrameCount = %d, want one hardware-timed TX echo", got)
 	}
@@ -423,10 +424,10 @@ func TestBusLoadMatchesEchoBeforeWriteReturns(t *testing.T) {
 
 func TestBusLoadMatchesDelayedTxEcho(t *testing.T) {
 	var meter busLoadMeter
-	meter.configure(config{NominalBitrate: 500_000})
+	meter.configure(can.Config{NominalBitrate: 500_000})
 	now := time.Unix(0, 0)
-	meter.recordTx(0x123, false, false, nil, now)
-	meter.observe(frame{Direction: TX, ID: 0x123, TimestampUS: 1_200_000}, now.Add(200*time.Millisecond))
+	meter.recordTx(txFrame(0x123, nil), now)
+	meter.observe(can.Frame{Direction: can.Transmit, ID: 0x123, TimestampUS: 1_200_000}, now.Add(200*time.Millisecond))
 	if got := meter.snapshot(now.Add(200 * time.Millisecond)).FrameCount; got != 1 {
 		t.Fatalf("FrameCount = %d, want one confirmed TX", got)
 	}
@@ -437,11 +438,11 @@ func TestBusLoadMatchesDelayedTxEcho(t *testing.T) {
 
 func TestBusLoadAgesHardwareWindowBeforeDelayedFrame(t *testing.T) {
 	var meter busLoadMeter
-	meter.configure(config{NominalBitrate: 500_000})
+	meter.configure(can.Config{NominalBitrate: 500_000})
 	now := time.Unix(0, 0)
-	meter.observe(frame{Direction: RX, ID: 0x100, TimestampUS: 1_000_000}, now)
+	meter.observe(can.Frame{Direction: can.Receive, ID: 0x100, TimestampUS: 1_000_000}, now)
 	// The second frame is delivered late; its device timestamp advanced only 100 ms.
-	meter.observe(frame{Direction: RX, ID: 0x101, TimestampUS: 1_100_000}, now.Add(1100*time.Millisecond))
+	meter.observe(can.Frame{Direction: can.Receive, ID: 0x101, TimestampUS: 1_100_000}, now.Add(1100*time.Millisecond))
 	if got := meter.snapshot(now.Add(1100 * time.Millisecond)).FrameCount; got != 1 {
 		t.Fatalf("FrameCount = %d, want old frame expired before delayed delivery", got)
 	}
@@ -449,15 +450,21 @@ func TestBusLoadAgesHardwareWindowBeforeDelayedFrame(t *testing.T) {
 
 func TestBusLoadSteadyHardwareWindowDoesNotDropPartialBucket(t *testing.T) {
 	var meter busLoadMeter
-	meter.configure(config{NominalBitrate: 500_000, DataBitrate: 2_000_000})
+	meter.configure(can.Config{NominalBitrate: 500_000, DataBitrate: 2_000_000})
 	start := time.Unix(0, 0)
 	for i := 0; i < 200; i++ {
 		at := time.Duration(i) * 10 * time.Millisecond
-		meter.observe(frame{Direction: RX, ID: 0x123, TimestampUS: 1_000_000 + uint64(at/time.Microsecond)}, start.Add(at))
+		meter.observe(can.Frame{Direction: can.Receive, ID: 0x123, TimestampUS: 1_000_000 + uint64(at/time.Microsecond)}, start.Add(at))
 	}
 	// The exact one-second window (1.015s, 2.015s] contains frames at 1.02s..1.99s.
 	got := meter.snapshot(start.Add(2015 * time.Millisecond))
 	if got.FrameCount != 98 {
 		t.Fatalf("FrameCount = %d, want 98 frames in the most recent second", got.FrameCount)
 	}
+}
+
+func txFrame(id uint32, data []byte) can.Frame {
+	frame := can.Frame{ID: id, DLC: can.LengthToDLC(len(data))}
+	copy(frame.Data[:], data)
+	return frame
 }

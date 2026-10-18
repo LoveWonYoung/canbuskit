@@ -3,19 +3,21 @@ package backend
 import (
 	"context"
 	"sync"
+
+	"github.com/LoveWonYoung/canbuskit/v2/can"
 )
 
 type rxFanout struct {
 	mu        sync.RWMutex
-	subs      map[chan frame]struct{}
+	subs      map[chan can.Frame]struct{}
 	closed    bool
 	wg        sync.WaitGroup
-	telemetry *driverTelemetry
+	telemetry *telemetry
 }
 
-func newRxFanout(ctx context.Context, source <-chan frame, telemetry *driverTelemetry) *rxFanout {
+func newRxFanout(ctx context.Context, source <-chan can.Frame, telemetry *telemetry) *rxFanout {
 	f := &rxFanout{
-		subs:      make(map[chan frame]struct{}),
+		subs:      make(map[chan can.Frame]struct{}),
 		telemetry: telemetry,
 	}
 	f.wg.Go(func() {
@@ -36,11 +38,11 @@ func newRxFanout(ctx context.Context, source <-chan frame, telemetry *driverTele
 	return f
 }
 
-func (f *rxFanout) Subscribe(buffer int) (<-chan frame, func()) {
+func (f *rxFanout) Subscribe(buffer int) (<-chan can.Frame, func()) {
 	if buffer < 0 {
 		buffer = 0
 	}
-	ch := make(chan frame, buffer)
+	ch := make(chan can.Frame, buffer)
 	f.mu.Lock()
 	if f.closed {
 		close(ch)
@@ -64,7 +66,7 @@ func (f *rxFanout) Subscribe(buffer int) (<-chan frame, func()) {
 	return ch, unsubscribe
 }
 
-func (f *rxFanout) dispatch(msg frame) {
+func (f *rxFanout) dispatch(msg can.Frame) {
 	f.mu.RLock()
 	defer f.mu.RUnlock()
 	for ch := range f.subs {

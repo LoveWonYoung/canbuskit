@@ -2,54 +2,40 @@
 
 package backend
 
-import "testing"
+import (
+	"github.com/LoveWonYoung/canbuskit/v2/can"
+	"testing"
+)
 
-func TestBuildCANFDInitConfig(t *testing.T) {
-	timing := CANFDInitConfig{
-		NBT_BRP: 2, NBT_SEG1: 10, NBT_SEG2: 3, NBT_SJW: 1,
-		DBT_BRP: 1, DBT_SEG1: 7, DBT_SEG2: 2, DBT_SJW: 1,
+func TestApplyToomossTimingKeepsDefaults(t *testing.T) {
+	cfg := can.Config{
+		NominalTiming: can.BitTiming{BRP: 2, SEG1: 10, SEG2: 3, SJW: 1},
+		DataTiming:    can.BitTiming{BRP: 1, SEG1: 7, SEG2: 2, SJW: 1},
 	}
-	cfg := BuildCANFDInitConfig(timing)
-	if cfg.Mode != 0 || cfg.RetrySend != 1 || cfg.ISOCRCEnable != 1 || cfg.ResEnable != 1 {
-		t.Fatalf("BuildCANFDInitConfig() lost Toomoss defaults: %+v", cfg)
+	got := applyToomossTiming(cfg)
+	if got.Mode != 0 || got.RetrySend != 1 || got.ISOCRCEnable != 1 || got.ResEnable != 1 {
+		t.Fatalf("applyToomossTiming() lost Toomoss defaults: %+v", got)
 	}
-	if cfg.NBT_BRP != 2 || cfg.NBT_SEG1 != 10 || cfg.DBT_SEG1 != 7 {
-		t.Fatalf("BuildCANFDInitConfig() timing not applied: %+v", cfg)
-	}
-}
-
-func TestToomossSetCANFDTiming(t *testing.T) {
-	drv := NewToomoss(CANFD, CHANNEL1)
-	before := drv.canFDInitConfig
-	timing := CANFDInitConfig{
-		NBT_BRP: 3, NBT_SEG1: 11, NBT_SEG2: 4, NBT_SJW: 2,
-		DBT_BRP: 2, DBT_SEG1: 8, DBT_SEG2: 3, DBT_SJW: 1,
-	}
-	drv.SetCANFDTiming(timing)
-	got := drv.canFDInitConfig
-	if got.Mode != before.Mode || got.RetrySend != before.RetrySend {
-		t.Fatalf("SetCANFDTiming() changed non-timing fields: before=%+v after=%+v", before, got)
-	}
-	if got.NBT_BRP != 3 || got.DBT_SEG1 != 8 || got.DBT_SJW != 1 {
-		t.Fatalf("SetCANFDTiming() timing not applied: %+v", got)
+	if got.NBT_BRP != 2 || got.NBT_SEG1 != 10 || got.DBT_SEG1 != 7 {
+		t.Fatalf("applyToomossTiming() timing not applied: %+v", got)
 	}
 }
 
 func TestToomossSetBRS(t *testing.T) {
-	drv := NewToomoss(CANFD, CHANNEL1)
+	drv := newToomoss(can.DefaultConfig(can.FD, can.Channel1))
 	if drv.brs() {
 		t.Fatal("BRS must be off by default")
 	}
 	drv.setBRS(true)
 	if !drv.brs() || !drv.config().BRS {
-		t.Fatal("SetBRS(true) did not enable BRS")
+		t.Fatal("setBRS(true) did not enable BRS")
 	}
 }
 
 func TestToomossClassicFlags(t *testing.T) {
-	remoteFlag, externFlag := encodeToomossClassicFlags(CHANNEL2, false, false)
+	remoteFlag, externFlag := encodeToomossClassicFlags(can.Channel2, false, false)
 	channel, remote, extended, errorFrame, txEcho := decodeToomossClassicFlags(remoteFlag, externFlag)
-	if channel != CHANNEL2 || remote || extended || errorFrame || txEcho {
+	if channel != can.Channel2 || remote || extended || errorFrame || txEcho {
 		t.Fatalf(
 			"decoded flags = channel %d, remote %t, extended %t, error %t, tx %t",
 			channel, remote, extended, errorFrame, txEcho,

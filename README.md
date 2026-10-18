@@ -144,6 +144,10 @@ cfg.Logger = slog.Default()
 
 `bus.BusLoad()` 返回滚动总线负载估计，`bus.Stats()` 返回接收队列丢帧统计。硬件时间戳保存在 `can.Frame.TimestampUS`，0 表示设备没有提供时间戳。
 
+CAN FD 的位时序默认由波特率推导。需要固定段参数时，同时填写 `NominalTiming` 和 `DataTiming`（`BRP`、`SEG1`、`SEG2`、`SJW` 都要非零）。经典 CAN 不接受显式时序。`Errors()` 返回的 channel 跟驱动对象走同一段生命周期，`Close` 不会关掉或换掉它。
+
+设备型号常量在各自的公开包里：`vector.VN1640`、`vector.VN1630`、`canalystii.USBCAN2`、`tsmaster.TC1016`。零值会选这些默认型号。
+
 ## 测试
 
 ```bash

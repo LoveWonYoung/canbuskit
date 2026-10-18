@@ -6,6 +6,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"github.com/LoveWonYoung/canbuskit/v2/can"
 	"path/filepath"
 	"strings"
 	"syscall"
@@ -99,16 +100,16 @@ type VCI_CAN_OBJ struct {
 // CanalystII drives Zhou Ligong / Chuangxin CANalyst-II style adapters via ControlCAN.dll.
 // These devices support classic (standard) CAN only.
 type CanalystII struct {
-	driverObservability
+	observability
 	CANChannel byte
 	DeviceType int
 	DeviceInd  int
-	lifecycle  driverLifecycle
+	lifecycle  lifecycle
 	fanout     *rxFanout
-	cfg        config
+	cfg        can.Config
 	ctx        context.Context
 	cancel     context.CancelFunc
-	rxChan     chan frame
+	rxChan     chan can.Frame
 	opened     bool
 
 	dll             *syscall.LazyDLL
@@ -121,22 +122,11 @@ type CanalystII struct {
 	receiveProc     *syscall.LazyProc
 }
 
-func NewCanalystII(canChannel byte) *CanalystII {
-	return NewCanalystIIWithConfig(defaultConfig(CAN, canChannel))
-}
-
-func NewCanalystIIWithConfig(cfg config) *CanalystII {
-	return NewCanalystIIWithDevice(cfg, VCI_USBCAN2, 0)
-}
-
-func NewCanalystIIWithDevice(cfg config, deviceType, deviceInd int) *CanalystII {
-	ctx, cancel := context.WithCancel(context.Background())
+func newCanalystII(cfg can.Config, deviceType, deviceInd int) *CanalystII {
 	return &CanalystII{
 		CANChannel: cfg.Channel,
 		DeviceType: deviceType,
 		DeviceInd:  deviceInd,
-		ctx:        ctx,
-		cancel:     cancel,
 		cfg:        cfg,
 	}
 }
@@ -152,14 +142,14 @@ func (c *CanalystII) initialize() error {
 	if err != nil {
 		return err
 	}
-	if cfg.Mode != CAN {
+	if cfg.Mode != can.Classic {
 		return errors.New("CanalystII supports classic CAN only")
 	}
 	c.cfg = cfg
 	c.CANChannel = cfg.Channel
 	c.ctx, c.cancel = context.WithCancel(context.Background())
-	c.rxChan = make(chan frame, cfg.RxBufferSize)
-	c.fanout = newRxFanout(c.ctx, c.rxChan, c.resetTelemetryWith(cfg))
+	c.rxChan = make(chan can.Frame, cfg.RxBufferSize)
+	c.fanout = newRxFanout(c.ctx, c.rxChan, c.prepare(cfg))
 
 	cleanup := func(err error) error {
 		if c.opened && c.closeDeviceProc != nil {
@@ -177,7 +167,6 @@ func (c *CanalystII) initialize() error {
 			close(c.rxChan)
 			c.rxChan = nil
 		}
-		c.closeTelemetry()
 		return err
 	}
 
@@ -244,7 +233,7 @@ func (c *CanalystII) start() error {
 	c.lifecycle.opMu.Lock()
 	defer c.lifecycle.opMu.Unlock()
 	if !c.lifecycle.isInitialized() || !c.opened {
-		return fmt.Errorf("%w: CanalystII", ErrDeviceNotInitialized)
+		return can.ErrNotOpen
 	}
 	if c.lifecycle.start(c.readLoop) {
 		logf(c.cfg, "CanalystII backend started")
@@ -255,7 +244,7 @@ func (c *CanalystII) start() error {
 func (c *CanalystII) readLoop() {
 	ticker := time.NewTicker(c.cfg.PollingInterval)
 	defer ticker.Stop()
-	var canMsg [MsgBufferSize]VCI_CAN_OBJ
+	var canMsg [msgBufferSize]VCI_CAN_OBJ
 	for {
 		select {
 		case <-c.ctx.Done():
@@ -266,7 +255,7 @@ func (c *CanalystII) readLoop() {
 				uintptr(c.DeviceInd),
 				uintptr(c.CANChannel),
 				uintptr(unsafe.Pointer(&canMsg[0])),
-				uintptr(MsgBufferSize),
+				uintptr(msgBufferSize),
 				0,
 			)
 			// VCI_Receive returns the frame count; 0xFFFFFFFF (-1 as ULONG) means device error.
@@ -278,7 +267,7 @@ func (c *CanalystII) readLoop() {
 			if count == 0 {
 				continue
 			}
-			if count > MsgBufferSize {
+			if count > msgBufferSize {
 				logf(c.cfg, "CanalystII returned invalid receive count %d", count)
 				continue
 			}
@@ -293,8 +282,8 @@ func (c *CanalystII) readLoop() {
 				if msg.DataLen > 8 {
 					continue
 				}
-				var unifiedMsg frame
-				unifiedMsg.Direction = RX
+				var unifiedMsg can.Frame
+				unifiedMsg.Direction = can.Receive
 				unifiedMsg.ID = msg.ID
 				unifiedMsg.DLC = msg.DataLen
 				unifiedMsg.FD = false
@@ -304,7 +293,7 @@ func (c *CanalystII) readLoop() {
 				if msg.TimeFlag != 0 {
 					elapsedUS, deltaUS = c.relativeLogTimes(unifiedMsg.TimestampUS, canalystTimestampWrapUS())
 				}
-				logCANMessageRelative(c.cfg, "RX", unifiedMsg.ID, unifiedMsg.DLC, unifiedMsg.Data[:msg.DataLen], CAN, elapsedUS, deltaUS)
+				logCANMessageRelative(c.cfg, "RX", unifiedMsg.ID, unifiedMsg.DLC, unifiedMsg.Data[:msg.DataLen], can.Classic, elapsedUS, deltaUS)
 				c.publishRxWithWrap(c.ctx, c.rxChan, unifiedMsg, canalystTimestampWrapUS())
 			}
 		}
@@ -330,21 +319,20 @@ func (c *CanalystII) stop() {
 		close(c.rxChan)
 		c.rxChan = nil
 	}
-	c.closeTelemetry()
 	logf(c.cfg, "CanalystII stopped")
 }
 
-func (c *CanalystII) write(id int32, fd bool, data []byte) error {
+func (c *CanalystII) write(frame can.Frame) error {
+	id := int32(frame.ID)
+	fd := frame.FD
+	data := frame.Data[:frame.DataLength()]
 	c.lifecycle.opMu.Lock()
 	defer c.lifecycle.opMu.Unlock()
 	if !c.lifecycle.isInitialized() || !c.opened {
-		return errors.New("CanalystII driver is not initialized")
+		return can.ErrNotOpen
 	}
 	if fd {
 		return errors.New("CanalystII does not support CAN-FD")
-	}
-	if err := validateWrite(c.cfg, id, fd, data); err != nil {
-		return err
 	}
 
 	var msg VCI_CAN_OBJ
@@ -367,8 +355,8 @@ func (c *CanalystII) write(id int32, fd bool, data []byte) error {
 		return fmt.Errorf("VCI_Transmit failed: sent %d of 1", ret)
 	}
 	// VCI_Transmit does not return a device timestamp or a TX confirmation.
-	logCANMessageRelative(c.cfg, "TX", msg.ID, msg.DataLen, msg.Data[:msg.DataLen], CAN, 0, 0)
-	c.recordBusTx(id, false, false, data)
+	logCANMessageRelative(c.cfg, "TX", msg.ID, msg.DataLen, msg.Data[:msg.DataLen], can.Classic, 0, 0)
+	c.recordBusTx(frame)
 	return nil
 }
 
@@ -384,7 +372,7 @@ func canalystTimestampWrapUS() uint64 {
 	return (uint64(1) << 32) * 100
 }
 
-func (c *CanalystII) subscribe(buffer int) (<-chan frame, func()) {
+func (c *CanalystII) subscribe(buffer int) (<-chan can.Frame, func()) {
 	c.lifecycle.opMu.Lock()
 	defer c.lifecycle.opMu.Unlock()
 	if c.fanout == nil {
@@ -397,7 +385,7 @@ func (c *CanalystII) isFD() bool {
 	return false
 }
 
-func (c *CanalystII) config() config {
+func (c *CanalystII) config() can.Config {
 	c.lifecycle.opMu.Lock()
 	defer c.lifecycle.opMu.Unlock()
 	return c.cfg

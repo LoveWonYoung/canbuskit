@@ -4,6 +4,7 @@ package backend
 
 import (
 	"bytes"
+	"github.com/LoveWonYoung/canbuskit/v2/can"
 	"log/slog"
 	"strings"
 	"testing"
@@ -41,7 +42,7 @@ func TestCanalystTimestampUS(t *testing.T) {
 func TestPCANEchoLogUsesRelativeHardwareTimes(t *testing.T) {
 	var output bytes.Buffer
 
-	driver := &PCAN{cfg: config{IncludeTxEcho: false, Logger: slog.New(slog.NewTextHandler(&output, nil))}}
+	driver := &PCAN{cfg: can.Config{IncludeTxEcho: false, Logger: slog.New(slog.NewTextHandler(&output, nil))}}
 	driver.enqueueMessage(0x123, 1, []byte{0xAA}, pcanMessageEcho, 1_002_003)
 	driver.enqueueMessage(0x123, 1, []byte{0xBB}, pcanMessageEcho, 1_003_507)
 

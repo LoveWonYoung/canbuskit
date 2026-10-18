@@ -11,8 +11,7 @@ import (
 	isotp "github.com/LoveWonYoung/canbuskit/v2/isotp"
 )
 
-// Transport 定义了 UDS 客户端所需的 ISO-TP 传输层接口
-// 这允许我们在测试中注入 Mock 对象
+// transport is the ISO-TP surface required by a UDS client.
 type transport interface {
 	SendContext(context.Context, []byte) error
 	RecvChan() <-chan []byte
@@ -21,11 +20,10 @@ type transport interface {
 	Close() error
 }
 
-// 通道缓冲区大小常量
 const (
-	responsePendingTimeout = 5000 * time.Millisecond // Response Pending 超时
+	responsePendingTimeout = 5000 * time.Millisecond
 	defaultMaxPending      = 16
-	defaultMaxRetries      = 3 // 默认最大重试次数
+	defaultMaxRetries      = 3
 )
 
 var (
@@ -37,7 +35,7 @@ var (
 // NRC is an ISO 14229 negative response code.
 type NRC byte
 
-// UDS 负响应码 (Negative Response Code)
+// Negative response codes from ISO 14229.
 const (
 	PositiveResponse                                 NRC = 0x00
 	GeneralReject                                        = 0x10

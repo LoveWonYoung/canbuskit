@@ -8,6 +8,9 @@ import (
 	"github.com/LoveWonYoung/canbuskit/v2/driver/internal/backend"
 )
 
+// TC1016 is the default TOSUN device type used when Options.DeviceType is zero.
+const TC1016 = 11
+
 type Options struct {
 	DeviceType int
 	Mapping    *Mapping
@@ -23,7 +26,7 @@ type Mapping struct {
 func New(cfg can.Config, options Options) can.Driver {
 	deviceType := options.DeviceType
 	if deviceType == 0 {
-		deviceType = backend.TC1016
+		deviceType = TC1016
 	}
 	if options.Mapping == nil {
 		return backend.TSMasterBus(cfg, deviceType, nil)

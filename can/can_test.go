@@ -47,4 +47,23 @@ func TestConfigNormalization(t *testing.T) {
 	if err := (can.Config{Mode: can.Classic, BRS: true}).Validate(); err == nil {
 		t.Fatal("classic mode with BRS was accepted")
 	}
+	if err := (can.Config{Mode: can.Classic, NominalTiming: can.BitTiming{BRP: 1, SEG1: 2, SEG2: 1, SJW: 1}}).Validate(); err == nil {
+		t.Fatal("classic mode with explicit timing was accepted")
+	}
+	partial := can.Config{Mode: can.FD, NominalTiming: can.BitTiming{BRP: 1, SEG1: 2, SEG2: 1, SJW: 1}}
+	if err := partial.Validate(); err == nil {
+		t.Fatal("CAN FD timing with only one phase was accepted")
+	}
+	incomplete := can.Config{Mode: can.FD, NominalTiming: can.BitTiming{SEG1: 2}, DataTiming: can.BitTiming{BRP: 1, SEG1: 2, SEG2: 1, SJW: 1}}
+	if err := incomplete.Validate(); err == nil {
+		t.Fatal("partial bit timing was accepted")
+	}
+	explicit := can.Config{
+		Mode:          can.FD,
+		NominalTiming: can.BitTiming{BRP: 1, SEG1: 59, SEG2: 20, SJW: 2},
+		DataTiming:    can.BitTiming{BRP: 1, SEG1: 14, SEG2: 5, SJW: 2},
+	}
+	if err := explicit.Validate(); err != nil {
+		t.Fatalf("complete CAN FD timing was rejected: %v", err)
+	}
 }

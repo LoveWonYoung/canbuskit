@@ -9,8 +9,8 @@ import (
 )
 
 const (
-	VN1630 = backend.CANOEVN1630
-	VN1640 = backend.CANOEVN1640
+	VN1630 = 57
+	VN1640 = 59
 )
 
 type Options struct {

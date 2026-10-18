@@ -32,6 +32,28 @@ const (
 	Receive
 )
 
+// BitTiming is an optional segment set for one CAN bit-rate phase.
+// The zero value tells a backend to derive timing from the bitrate.
+type BitTiming struct {
+	BRP  byte
+	SEG1 byte
+	SEG2 byte
+	SJW  byte
+}
+
+// IsZero reports whether the backend should derive this phase from the bitrate.
+func (t BitTiming) IsZero() bool { return t == BitTiming{} }
+
+func (t BitTiming) validate() error {
+	if t.IsZero() {
+		return nil
+	}
+	if t.BRP == 0 || t.SEG1 == 0 || t.SEG2 == 0 || t.SJW == 0 {
+		return errors.New("BRP, SEG1, SEG2, and SJW must all be non-zero")
+	}
+	return nil
+}
+
 // Config contains settings shared by hardware and in-memory backends.
 type Config struct {
 	Mode            Mode
@@ -42,6 +64,10 @@ type Config struct {
 	PollingInterval time.Duration
 	IncludeTxEcho   bool
 	BRS             bool
+	// NominalTiming and DataTiming optionally replace bitrate-derived CAN FD timing.
+	// Both phases must be set together. Classic mode does not accept explicit timing.
+	NominalTiming BitTiming
+	DataTiming    BitTiming
 	// Logger receives backend diagnostics and frame logs. Nil disables logging.
 	Logger *slog.Logger
 }
@@ -74,6 +100,18 @@ func (cfg Config) Normalized() (Config, error) {
 	}
 	if cfg.Mode == Classic && cfg.BRS {
 		return Config{}, errors.New("BRS requires CAN FD mode")
+	}
+	if err := cfg.NominalTiming.validate(); err != nil {
+		return Config{}, fmt.Errorf("nominal timing: %w", err)
+	}
+	if err := cfg.DataTiming.validate(); err != nil {
+		return Config{}, fmt.Errorf("data timing: %w", err)
+	}
+	if cfg.Mode == Classic && (!cfg.NominalTiming.IsZero() || !cfg.DataTiming.IsZero()) {
+		return Config{}, errors.New("explicit bit timing requires CAN FD mode")
+	}
+	if cfg.Mode == FD && cfg.NominalTiming.IsZero() != cfg.DataTiming.IsZero() {
+		return Config{}, errors.New("CAN FD explicit timing requires both nominal and data phases")
 	}
 	if cfg.NominalBitrate == 0 {
 		cfg.NominalBitrate = 500_000
@@ -257,7 +295,9 @@ func (e *ReceiveOverflowError) Unwrap() error { return ErrRxOverflow }
 
 // Driver is the complete lifecycle and I/O contract implemented by backends.
 // The caller owns the driver: Open it before use and Close it after all clients
-// have stopped.
+// have stopped. Errors returns one channel for the life of the driver; Close
+// does not close or replace it. A later Open delivers subsequent errors on
+// that same channel.
 type Driver interface {
 	Open(context.Context) error
 	Close() error

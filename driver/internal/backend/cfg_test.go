@@ -7,19 +7,21 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/LoveWonYoung/canbuskit/v2/can"
 )
 
-func TestCanFrameValidDataLength(t *testing.T) {
+func TestFrameValidDataLength(t *testing.T) {
 	tests := []struct {
 		name  string
-		frame frame
+		frame can.Frame
 		want  int
 		valid bool
 	}{
-		{name: "classic", frame: frame{DLC: 8}, want: 8, valid: true},
-		{name: "classic invalid", frame: frame{DLC: 9}, valid: false},
-		{name: "fd", frame: frame{DLC: 15, FD: true}, want: 64, valid: true},
-		{name: "fd invalid", frame: frame{DLC: 16, FD: true}, valid: false},
+		{name: "classic", frame: can.Frame{DLC: 8}, want: 8, valid: true},
+		{name: "classic invalid", frame: can.Frame{DLC: 9}, valid: false},
+		{name: "fd", frame: can.Frame{DLC: 15, FD: true}, want: 64, valid: true},
+		{name: "fd invalid", frame: can.Frame{DLC: 16, FD: true}, valid: false},
 	}
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
@@ -32,21 +34,21 @@ func TestCanFrameValidDataLength(t *testing.T) {
 }
 
 func TestDefaultConfig(t *testing.T) {
-	cfg := defaultConfig(CANFD, CHANNEL2)
-	if cfg.Mode != CANFD {
-		t.Fatalf("Mode = %d, want CANFD", cfg.Mode)
+	cfg := can.DefaultConfig(can.FD, can.Channel2)
+	if cfg.Mode != can.FD {
+		t.Fatalf("Mode = %d, want FD", cfg.Mode)
 	}
-	if cfg.Channel != CHANNEL2 {
-		t.Fatalf("Channel = %d, want %d", cfg.Channel, CHANNEL2)
+	if cfg.Channel != can.Channel2 {
+		t.Fatalf("Channel = %d, want %d", cfg.Channel, can.Channel2)
 	}
 	if cfg.NominalBitrate != 500_000 || cfg.DataBitrate != 2_000_000 {
 		t.Fatalf("unexpected default bitrates: %d/%d", cfg.NominalBitrate, cfg.DataBitrate)
 	}
-	if cfg.RxBufferSize != RxChannelBufferSize {
-		t.Fatalf("RxBufferSize = %d, want %d", cfg.RxBufferSize, RxChannelBufferSize)
+	if cfg.RxBufferSize != 1024 {
+		t.Fatalf("RxBufferSize = %d, want 1024", cfg.RxBufferSize)
 	}
-	if cfg.PollingInterval != PollingInterval {
-		t.Fatalf("PollingInterval = %s, want %s", cfg.PollingInterval, PollingInterval)
+	if cfg.PollingInterval != time.Millisecond {
+		t.Fatalf("PollingInterval = %s, want %s", cfg.PollingInterval, time.Millisecond)
 	}
 	if cfg.IncludeTxEcho {
 		t.Fatal("TX echo must be disabled by default")
@@ -57,21 +59,21 @@ func TestDefaultConfig(t *testing.T) {
 }
 
 func TestNormalizeConfigFillsDefaults(t *testing.T) {
-	cfg, err := normalizeConfig(config{Mode: CAN, Channel: CHANNEL1})
+	cfg, err := normalizeConfig(can.Config{Mode: can.Classic, Channel: can.Channel1})
 	if err != nil {
 		t.Fatal(err)
 	}
-	want := defaultConfig(CAN, CHANNEL1)
+	want := can.DefaultConfig(can.Classic, can.Channel1)
 	if cfg != want {
 		t.Fatalf("normalizeConfig() = %+v, want %+v", cfg, want)
 	}
 }
 
 func TestNormalizeConfigRejectsInvalidValues(t *testing.T) {
-	tests := []config{
-		{Mode: mode(99)},
-		{Mode: CAN, RxBufferSize: -1},
-		{Mode: CAN, PollingInterval: -time.Millisecond},
+	tests := []can.Config{
+		{Mode: can.Mode(99)},
+		{Mode: can.Classic, RxBufferSize: -1},
+		{Mode: can.Classic, PollingInterval: -time.Millisecond},
 	}
 	for _, cfg := range tests {
 		if err := cfg.Validate(); err == nil {
@@ -83,51 +85,10 @@ func TestNormalizeConfigRejectsInvalidValues(t *testing.T) {
 	}
 }
 
-func TestValidateWriteStandardCANAndCANFD(t *testing.T) {
-	canCfg := defaultConfig(CAN, CHANNEL1)
-	fdCfg := defaultConfig(CANFD, CHANNEL1)
-
-	valid := []struct {
-		cfg  config
-		id   int32
-		fd   bool
-		data []byte
-	}{
-		{canCfg, 0, false, nil},
-		{canCfg, 0x7FF, false, make([]byte, 8)},
-		{fdCfg, 0x123, false, make([]byte, 8)},
-		{fdCfg, 0x123, true, nil},
-		{fdCfg, 0x123, true, make([]byte, 64)},
-	}
-	for _, tc := range valid {
-		if err := validateWrite(tc.cfg, tc.id, tc.fd, tc.data); err != nil {
-			t.Fatalf("validateWrite(%+v, 0x%X, %t, len=%d): %v", tc.cfg, tc.id, tc.fd, len(tc.data), err)
-		}
-	}
-
-	invalid := []struct {
-		cfg  config
-		id   int32
-		fd   bool
-		data []byte
-	}{
-		{canCfg, -1, false, nil},
-		{canCfg, 0x800, false, nil},
-		{canCfg, 0x123, true, nil},
-		{canCfg, 0x123, false, make([]byte, 9)},
-		{fdCfg, 0x123, true, make([]byte, 65)},
-	}
-	for _, tc := range invalid {
-		if err := validateWrite(tc.cfg, tc.id, tc.fd, tc.data); err == nil {
-			t.Fatalf("validateWrite(%+v, 0x%X, %t, len=%d) unexpectedly succeeded", tc.cfg, tc.id, tc.fd, len(tc.data))
-		}
-	}
-}
-
 func TestInjectedFrameLogger(t *testing.T) {
 	var output bytes.Buffer
-	cfg := config{Logger: slog.New(slog.NewTextHandler(&output, nil))}
-	logCANMessageRelative(cfg, "RX", 0x123, 1, []byte{0xAA}, CAN, 1_002_003, 500)
+	cfg := can.Config{Logger: slog.New(slog.NewTextHandler(&output, nil))}
+	logCANMessageRelative(cfg, "RX", 0x123, 1, []byte{0xAA}, can.Classic, 1_002_003, 500)
 
 	got := output.String()
 	if !strings.Contains(got, "ID=0x123") {
@@ -139,17 +100,17 @@ func TestInjectedFrameLogger(t *testing.T) {
 }
 
 func TestNilLoggerDisablesLogging(t *testing.T) {
-	logCANMessageRelative(config{}, "RX", 0x123, 1, []byte{0xAA}, CAN, 0, 0)
+	logCANMessageRelative(can.Config{}, "RX", 0x123, 1, []byte{0xAA}, can.Classic, 0, 0)
 }
 
-func TestDriverLifecycleWaitsForReadLoopAndIsIdempotent(t *testing.T) {
-	var lifecycle driverLifecycle
+func TestLifecycleWaitsForReadLoopAndIsIdempotent(t *testing.T) {
+	var life lifecycle
 	ctx, cancel := context.WithCancel(context.Background())
 	started := make(chan struct{})
 	exited := make(chan struct{})
 
-	lifecycle.markInitialized()
-	if !lifecycle.start(func() {
+	life.markInitialized()
+	if !life.start(func() {
 		close(started)
 		<-ctx.Done()
 		close(exited)
@@ -157,11 +118,11 @@ func TestDriverLifecycleWaitsForReadLoopAndIsIdempotent(t *testing.T) {
 		t.Fatal("first start failed")
 	}
 	<-started
-	if lifecycle.start(func() {}) {
+	if life.start(func() {}) {
 		t.Fatal("second concurrent start unexpectedly succeeded")
 	}
 
-	if !lifecycle.cancelAndWait(cancel) {
+	if !life.cancelAndWait(cancel) {
 		t.Fatal("stop did not report initialized state")
 	}
 	select {
@@ -169,10 +130,10 @@ func TestDriverLifecycleWaitsForReadLoopAndIsIdempotent(t *testing.T) {
 	default:
 		t.Fatal("cancelAndWait returned before read loop exited")
 	}
-	if lifecycle.cancelAndWait(cancel) {
+	if life.cancelAndWait(cancel) {
 		t.Fatal("second stop unexpectedly reported initialized state")
 	}
-	if lifecycle.start(func() {}) {
-		t.Fatal("start after stop unexpectedly succeeded without Init")
+	if life.start(func() {}) {
+		t.Fatal("start after stop unexpectedly succeeded without initialize")
 	}
 }

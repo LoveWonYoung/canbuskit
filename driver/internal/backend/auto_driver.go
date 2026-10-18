@@ -3,13 +3,14 @@
 package backend
 
 import (
-	"errors"
 	"fmt"
 	"strings"
 	"sync"
+
+	"github.com/LoveWonYoung/canbuskit/v2/can"
 )
 
-type deviceFactory func(config) device
+type deviceFactory func(can.Config) device
 
 // autoCandidate describes one backend considered by autoDevice.
 type autoCandidate struct {
@@ -20,17 +21,17 @@ type autoCandidate struct {
 // defaultAutoCandidates returns the default backend priority.
 func defaultAutoCandidates() []autoCandidate {
 	return []autoCandidate{
-		{Name: "Toomoss", New: func(cfg config) device { return NewToomossWithConfig(cfg) }},
-		{Name: "TSMaster", New: func(cfg config) device { return NewTSMasterWithConfig(cfg, TC1016) }},
-		{Name: "PCAN", New: func(cfg config) device { return NewPCANWithConfig(cfg) }},
-		{Name: "Vector", New: func(cfg config) device { return NewVectorWithConfig(cfg, CANOEVN1640) }},
+		{Name: "Toomoss", New: func(cfg can.Config) device { return newToomoss(cfg) }},
+		{Name: "TSMaster", New: func(cfg can.Config) device { return newTSMaster(cfg, TC1016, nil) }},
+		{Name: "PCAN", New: func(cfg can.Config) device { return newPCAN(cfg) }},
+		{Name: "Vector", New: func(cfg can.Config) device { return newVector(cfg, vectorVN1640) }},
 	}
 }
 
 // autoDevice selects the first available, mode-compatible CAN device.
 type autoDevice struct {
-	canType      mode
-	cfg          config
+	canType      can.Mode
+	cfg          can.Config
 	candidates   []autoCandidate
 	mu           sync.Mutex
 	driver       device
@@ -39,7 +40,7 @@ type autoDevice struct {
 
 // newAutoDevice creates an automatic device selector. If no
 // candidates are supplied, defaultAutoCandidates is used.
-func newAutoDevice(cfg config, candidates ...autoCandidate) *autoDevice {
+func newAutoDevice(cfg can.Config, candidates ...autoCandidate) *autoDevice {
 	if len(candidates) == 0 {
 		candidates = defaultAutoCandidates()
 	}
@@ -82,7 +83,7 @@ func (a *autoDevice) initialize() error {
 			continue
 		}
 		isFD := dev.isFD()
-		wantFD := cfg.Mode == CANFD
+		wantFD := cfg.Mode == can.FD
 		if isFD != wantFD {
 			dev.stop()
 			err := fmt.Errorf("initialized in incompatible mode (want CAN-FD=%t, got CAN-FD=%t)", wantFD, isFD)
@@ -102,7 +103,7 @@ func (a *autoDevice) initialize() error {
 func (a *autoDevice) start() error {
 	drv := a.getDriver()
 	if drv == nil {
-		return fmt.Errorf("%w: autoDevice", ErrDeviceNotInitialized)
+		return can.ErrNotOpen
 	}
 	return drv.start()
 }
@@ -118,14 +119,14 @@ func (a *autoDevice) stop() {
 	}
 }
 
-func (a *autoDevice) write(id int32, fd bool, data []byte) error {
+func (a *autoDevice) write(frame can.Frame) error {
 	if drv := a.getDriver(); drv != nil {
-		return drv.write(id, fd, data)
+		return drv.write(frame)
 	}
-	return errors.New("CAN backend not initialized")
+	return can.ErrNotOpen
 }
 
-func (a *autoDevice) subscribe(buffer int) (<-chan frame, func()) {
+func (a *autoDevice) subscribe(buffer int) (<-chan can.Frame, func()) {
 	drv := a.getDriver()
 	if drv == nil {
 		return nil, func() {}
@@ -137,21 +138,21 @@ func (a *autoDevice) errors() <-chan error {
 	if drv := a.getDriver(); drv != nil {
 		return drv.errors()
 	}
-	return closedDriverErrors
+	return closedErrors
 }
 
-func (a *autoDevice) stats() driverStats {
+func (a *autoDevice) stats() can.Stats {
 	if drv := a.getDriver(); drv != nil {
 		return drv.stats()
 	}
-	return driverStats{}
+	return can.Stats{}
 }
 
-func (a *autoDevice) busLoad() busLoadSnapshot {
+func (a *autoDevice) busLoad() can.BusLoad {
 	if drv := a.getDriver(); drv != nil {
 		return drv.busLoad()
 	}
-	return busLoadSnapshot{}
+	return can.BusLoad{}
 }
 
 func (a *autoDevice) isFD() bool {
@@ -160,10 +161,10 @@ func (a *autoDevice) isFD() bool {
 	if a.driver != nil {
 		return a.driver.isFD()
 	}
-	return a.canType == CANFD
+	return a.canType == can.FD
 }
 
-func (a *autoDevice) config() config {
+func (a *autoDevice) config() can.Config {
 	a.mu.Lock()
 	defer a.mu.Unlock()
 	return a.cfg

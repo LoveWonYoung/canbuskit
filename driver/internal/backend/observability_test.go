@@ -4,18 +4,20 @@ import (
 	"context"
 	"errors"
 	"testing"
+
+	"github.com/LoveWonYoung/canbuskit/v2/can"
 )
 
 func TestPublishRxReportsSourceOverflow(t *testing.T) {
-	var observable driverObservability
+	var observable observability
 	beforeInit := observable.errors()
-	observable.resetTelemetry()
-	if afterInit := observable.errors(); beforeInit != afterInit {
-		t.Fatal("resetTelemetry replaced an active pre-init error subscription")
+	events := observable.prepare(can.Config{})
+	if afterInit := observable.errors(); beforeInit != afterInit || events.errors != beforeInit {
+		t.Fatal("prepare replaced the error channel")
 	}
-	destination := make(chan frame)
+	destination := make(chan can.Frame)
 
-	if observable.publishRx(context.Background(), destination, frame{}) {
+	if observable.publishRx(context.Background(), destination, can.Frame{}) {
 		t.Fatal("publishRx should report a full unbuffered destination")
 	}
 	if got := observable.stats().SourceDropped; got != 1 {
@@ -23,8 +25,12 @@ func TestPublishRxReportsSourceOverflow(t *testing.T) {
 	}
 	select {
 	case err := <-observable.errors():
-		if !errors.Is(err, errRxOverflow) {
-			t.Fatalf("error = %v, want errRxOverflow", err)
+		if !errors.Is(err, can.ErrRxOverflow) {
+			t.Fatalf("error = %v, want ErrRxOverflow", err)
+		}
+		overflow, ok := err.(*can.ReceiveOverflowError)
+		if !ok || overflow.Stage != "source" {
+			t.Fatalf("overflow = %#v, want stage source", err)
 		}
 	default:
 		t.Fatal("expected an overflow error")
@@ -32,17 +38,17 @@ func TestPublishRxReportsSourceOverflow(t *testing.T) {
 }
 
 func TestRxFanoutReportsSubscriberOverflowAndUnsubscribes(t *testing.T) {
-	telemetry := newDriverTelemetry()
+	events := newTelemetry()
 	fanout := &rxFanout{
-		subs:      make(map[chan frame]struct{}),
-		telemetry: telemetry,
+		subs:      make(map[chan can.Frame]struct{}),
+		telemetry: events,
 	}
 	received, unsubscribe := fanout.Subscribe(1)
 
-	fanout.dispatch(frame{ID: 1})
-	fanout.dispatch(frame{ID: 2})
+	fanout.dispatch(can.Frame{ID: 1})
+	fanout.dispatch(can.Frame{ID: 2})
 
-	if got := telemetry.stats().SubscriberDropped; got != 1 {
+	if got := events.stats().SubscriberDropped; got != 1 {
 		t.Fatalf("SubscriberDropped = %d, want 1", got)
 	}
 	first := <-received

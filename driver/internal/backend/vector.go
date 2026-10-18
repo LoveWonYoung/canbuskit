@@ -6,6 +6,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"github.com/LoveWonYoung/canbuskit/v2/can"
 	"os"
 	"path/filepath"
 	"runtime"
@@ -146,14 +147,14 @@ type xlCanFdConf struct {
 }
 
 type Vector struct {
-	driverObservability
-	canType   mode
-	cfg       config
-	rxChan    chan frame
+	observability
+	canType   can.Mode
+	cfg       can.Config
+	rxChan    chan can.Frame
 	fanout    *rxFanout
 	ctx       context.Context
 	cancel    context.CancelFunc
-	lifecycle driverLifecycle
+	lifecycle lifecycle
 
 	dll *syscall.LazyDLL
 
@@ -190,18 +191,10 @@ type Vector struct {
 	CANChannel int
 }
 
-func NewVector(canType mode, deviceType int, canChannel int) *Vector {
-	return NewVectorWithConfig(defaultConfig(canType, byte(canChannel)), deviceType)
-}
-
-func NewVectorWithConfig(cfg config, deviceType int) *Vector {
-	ctx, cancel := context.WithCancel(context.Background())
+func newVector(cfg can.Config, deviceType int) *Vector {
 	return &Vector{
 		canType:       cfg.Mode,
 		cfg:           cfg,
-		fanout:        nil,
-		ctx:           ctx,
-		cancel:        cancel,
 		portHandle:    vectorInvalidPortHandle,
 		canFdSjwAbr:   vectorDefaultCanFdSJW,
 		canFdTseg1Abr: vectorDefaultCanFdTseg1,
@@ -212,17 +205,6 @@ func NewVectorWithConfig(cfg config, deviceType int) *Vector {
 		DeviceType:    deviceType,
 		CANChannel:    int(cfg.Channel),
 	}
-}
-
-// SetCANFDInitConfig applies nominal (NBT) timing to arbitration and data (DBT)
-// timing to the data phase. BRP fields are ignored by the Vector API.
-func (v *Vector) SetCANFDInitConfig(cfg CANFDInitConfig) {
-	v.canFdSjwAbr = uint32(cfg.NBT_SJW)
-	v.canFdTseg1Abr = uint32(cfg.NBT_SEG1)
-	v.canFdTseg2Abr = uint32(cfg.NBT_SEG2)
-	v.canFdSjwDbr = uint32(cfg.DBT_SJW)
-	v.canFdTseg1Dbr = uint32(cfg.DBT_SEG1)
-	v.canFdTseg2Dbr = uint32(cfg.DBT_SEG2)
 }
 
 func (v *Vector) setBRS(enabled bool) {
@@ -250,9 +232,19 @@ func (v *Vector) initialize() error {
 	v.cfg = cfg
 	v.canType = cfg.Mode
 	v.CANChannel = int(cfg.Channel)
+	if !cfg.NominalTiming.IsZero() {
+		v.canFdSjwAbr = uint32(cfg.NominalTiming.SJW)
+		v.canFdTseg1Abr = uint32(cfg.NominalTiming.SEG1)
+		v.canFdTseg2Abr = uint32(cfg.NominalTiming.SEG2)
+	}
+	if !cfg.DataTiming.IsZero() {
+		v.canFdSjwDbr = uint32(cfg.DataTiming.SJW)
+		v.canFdTseg1Dbr = uint32(cfg.DataTiming.SEG1)
+		v.canFdTseg2Dbr = uint32(cfg.DataTiming.SEG2)
+	}
 	v.ctx, v.cancel = context.WithCancel(context.Background())
-	v.rxChan = make(chan frame, cfg.RxBufferSize)
-	v.fanout = newRxFanout(v.ctx, v.rxChan, v.resetTelemetryWith(cfg))
+	v.rxChan = make(chan can.Frame, cfg.RxBufferSize)
+	v.fanout = newRxFanout(v.ctx, v.rxChan, v.prepare(cfg))
 	v.portHandle = vectorInvalidPortHandle
 	cleanup := func(err error) error {
 		v.cancel()
@@ -267,7 +259,6 @@ func (v *Vector) initialize() error {
 		v.fanout = nil
 		v.rxChan = nil
 		v.portHandle = vectorInvalidPortHandle
-		v.closeTelemetry()
 		return err
 	}
 
@@ -299,7 +290,7 @@ func (v *Vector) start() error {
 	v.lifecycle.opMu.Lock()
 	defer v.lifecycle.opMu.Unlock()
 	if !v.lifecycle.isInitialized() || v.portHandle == vectorInvalidPortHandle {
-		return fmt.Errorf("%w: Vector", ErrDeviceNotInitialized)
+		return can.ErrNotOpen
 	}
 	if v.lifecycle.start(v.readLoop) {
 		logf(v.cfg, "Vector backend started")
@@ -331,22 +322,21 @@ func (v *Vector) stop() {
 		close(v.rxChan)
 		v.rxChan = nil
 	}
-	v.closeTelemetry()
 	v.portHandle = vectorInvalidPortHandle
 }
 
-func (v *Vector) write(id int32, fd bool, data []byte) error {
+func (v *Vector) write(frame can.Frame) error {
+	id := int32(frame.ID)
+	fd := frame.FD
+	data := frame.Data[:frame.DataLength()]
 	v.lifecycle.opMu.Lock()
 	defer v.lifecycle.opMu.Unlock()
 	if !v.lifecycle.isInitialized() {
-		return errors.New("Vector driver is not initialized")
-	}
-	if err := validateWrite(v.cfg, id, fd, data); err != nil {
-		return err
+		return can.ErrNotOpen
 	}
 
 	if fd {
-		if v.canType != CANFD {
+		if v.canType != can.FD {
 			return errors.New("Vector is not initialized in CAN-FD mode")
 		}
 		var txEvent xlCanTxEvent
@@ -357,7 +347,7 @@ func (v *Vector) write(id int32, fd bool, data []byte) error {
 		if v.cfg.BRS {
 			txEvent.TagData.CanMsg.MsgFlags |= vectorCanFdTxFlagBRS
 		}
-		txEvent.TagData.CanMsg.DLC = dataLenToDlc(len(data))
+		txEvent.TagData.CanMsg.DLC = can.LengthToDLC(len(data))
 		copy(txEvent.TagData.CanMsg.Data[:], data)
 
 		msgCount := uint32(1)
@@ -375,18 +365,18 @@ func (v *Vector) write(id int32, fd bool, data []byte) error {
 		if msgSent != 1 {
 			return fmt.Errorf("xlCanTransmitEx sent %d of 1 messages", msgSent)
 		}
-		v.recordBusTx(id, true, v.cfg.BRS, data)
+		v.recordBusTx(frame)
 		return nil
 	}
 
 	switch v.canType {
-	case CANFD:
+	case can.FD:
 		var txEvent xlCanTxEvent
 		txEvent.Tag = vectorCanFdTxTag
 		txEvent.TransID = 0xFFFF
 		txEvent.TagData.CanMsg.CanID = uint32(id)
 		txEvent.TagData.CanMsg.MsgFlags = 0
-		txEvent.TagData.CanMsg.DLC = dataLenToDlc(len(data))
+		txEvent.TagData.CanMsg.DLC = can.LengthToDLC(len(data))
 		copy(txEvent.TagData.CanMsg.Data[:], data)
 
 		msgCount := uint32(1)
@@ -404,9 +394,9 @@ func (v *Vector) write(id int32, fd bool, data []byte) error {
 		if msgSent != 1 {
 			return fmt.Errorf("xlCanTransmitEx sent %d of 1 messages", msgSent)
 		}
-		v.recordBusTx(id, false, false, data)
+		v.recordBusTx(frame)
 		return nil
-	case CAN:
+	case can.Classic:
 		var event xlEvent
 		event.Tag = vectorEventTagTransmitMsg
 		event.TagData.Msg.ID = uint32(id)
@@ -423,14 +413,14 @@ func (v *Vector) write(id int32, fd bool, data []byte) error {
 		if int32(status) != vectorStatusSuccess {
 			return fmt.Errorf("xlCanTransmit failed: %s", v.errorString(int16(status)))
 		}
-		v.recordBusTx(id, false, false, data)
+		v.recordBusTx(frame)
 		return nil
 	default:
 		return errors.New("unknown CAN type")
 	}
 }
 
-func (v *Vector) subscribe(buffer int) (<-chan frame, func()) {
+func (v *Vector) subscribe(buffer int) (<-chan can.Frame, func()) {
 	v.lifecycle.opMu.Lock()
 	defer v.lifecycle.opMu.Unlock()
 	if v.fanout == nil {
@@ -439,7 +429,7 @@ func (v *Vector) subscribe(buffer int) (<-chan frame, func()) {
 	return v.fanout.Subscribe(buffer)
 }
 
-func (v *Vector) config() config {
+func (v *Vector) config() can.Config {
 	v.lifecycle.opMu.Lock()
 	defer v.lifecycle.opMu.Unlock()
 	return v.cfg
@@ -601,7 +591,7 @@ func (v *Vector) openPort() error {
 	appName, _ := syscall.BytePtrFromString("")
 	permissionMask := v.channelMask
 	interfaceVersion := vectorInterfaceVersion
-	if v.canType == CANFD {
+	if v.canType == can.FD {
 		interfaceVersion = vectorInterfaceVersionV4
 	}
 	status, _, _ := v.openPortProc.Call(
@@ -629,7 +619,7 @@ func (v *Vector) configureChannel() error {
 		return errors.New("no init access for selected channel")
 	}
 
-	if v.canType == CANFD {
+	if v.canType == can.FD {
 		var conf xlCanFdConf
 		conf.ArbitrationBitRate = v.cfg.NominalBitrate
 		conf.DataBitRate = v.cfg.DataBitrate
@@ -680,7 +670,7 @@ func (v *Vector) readLoop() {
 
 func (v *Vector) readBurst() {
 	for {
-		if v.canType == CANFD {
+		if v.canType == can.FD {
 			if !v.readOneCanFD() {
 				return
 			}
@@ -716,12 +706,12 @@ func (v *Vector) readOneCanFD() bool {
 		return true
 	}
 	dlc := msg.DLC
-	payloadLen := dlcToLen(dlc)
+	payloadLen := dlcLen(dlc)
 
-	var unified frame
-	unified.Direction = RX
+	var unified can.Frame
+	unified.Direction = can.Receive
 	if event.Tag == vectorCanFdTagTxOK {
-		unified.Direction = TX
+		unified.Direction = can.Transmit
 	}
 	unified.ID = msg.CanID & 0x1FFFFFFF
 	unified.DLC = dlc
@@ -730,17 +720,17 @@ func (v *Vector) readOneCanFD() bool {
 	unified.TimestampUS = event.TimeStamp / 1_000
 	copy(unified.Data[:], msg.Data[:payloadLen])
 
-	msgType := CAN
+	msgType := can.Classic
 	if unified.FD {
-		msgType = CANFD
+		msgType = can.FD
 	}
 	direction := "RX"
-	if unified.Direction == TX {
+	if unified.Direction == can.Transmit {
 		direction = "TX"
 	}
 	elapsedUS, deltaUS := v.relativeLogTimes(unified.TimestampUS, 0)
 	logCANMessageRelative(v.cfg, direction, unified.ID, unified.DLC, unified.Data[:payloadLen], msgType, elapsedUS, deltaUS)
-	if unified.Direction == TX && !v.cfg.IncludeTxEcho {
+	if unified.Direction == can.Transmit && !v.cfg.IncludeTxEcho {
 		v.observeBusFrameWithBitCount(unified, msg.TotalBitCnt)
 		return true
 	}
@@ -782,12 +772,12 @@ func (v *Vector) readOneCAN() bool {
 		logf(v.cfg, "Vector returned invalid classic CAN DLC %d", dlc)
 		return true
 	}
-	payloadLen := dlcToLen(dlc)
+	payloadLen := dlcLen(dlc)
 
-	var unified frame
-	unified.Direction = RX
+	var unified can.Frame
+	unified.Direction = can.Receive
 	if event.TagData.Msg.Flags&vectorCanMsgFlagTXCompleted != 0 {
-		unified.Direction = TX
+		unified.Direction = can.Transmit
 	}
 	unified.ID = event.TagData.Msg.ID & 0x1FFFFFFF
 	unified.DLC = dlc
@@ -796,12 +786,12 @@ func (v *Vector) readOneCAN() bool {
 	copy(unified.Data[:], event.TagData.Msg.Data[:payloadLen])
 
 	direction := "RX"
-	if unified.Direction == TX {
+	if unified.Direction == can.Transmit {
 		direction = "TX"
 	}
 	elapsedUS, deltaUS := v.relativeLogTimes(unified.TimestampUS, 0)
-	logCANMessageRelative(v.cfg, direction, unified.ID, unified.DLC, unified.Data[:payloadLen], CAN, elapsedUS, deltaUS)
-	if unified.Direction == TX && !v.cfg.IncludeTxEcho {
+	logCANMessageRelative(v.cfg, direction, unified.ID, unified.DLC, unified.Data[:payloadLen], can.Classic, elapsedUS, deltaUS)
+	if unified.Direction == can.Transmit && !v.cfg.IncludeTxEcho {
 		v.observeBusFrame(unified)
 		return true
 	}
@@ -836,5 +826,5 @@ func (v *Vector) errorString(status int16) string {
 func (v *Vector) isFD() bool {
 	v.lifecycle.opMu.Lock()
 	defer v.lifecycle.opMu.Unlock()
-	return v.canType == CANFD
+	return v.canType == can.FD
 }

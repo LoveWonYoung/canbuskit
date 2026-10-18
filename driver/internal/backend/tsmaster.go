@@ -6,6 +6,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"github.com/LoveWonYoung/canbuskit/v2/can"
 	"math"
 	"os"
 	"path/filepath"
@@ -115,8 +116,8 @@ const (
 	TS_DEV_END
 )
 
-// TSMasterMap 设备编号对照表
-var TSMasterMap = map[string]int{
+// tsMasterNames maps TSMaster device names to type numbers.
+var tsMasterNames = map[string]int{
 	"TS_UNKNOWN_DEVICE": TS_UNKNOWN_DEVICE,
 	"TSCAN_PRO":         TSCAN_PRO,
 	"TSCAN_Lite1":       TSCAN_Lite1,
@@ -191,9 +192,9 @@ var TSMasterMap = map[string]int{
 	"TS_DEV_END":        TS_DEV_END,
 }
 
-// deviceNameFromType 根据设备编号反查设备名称
+// deviceNameFromType looks up the vendor device name for a numeric type.
 func deviceNameFromType(deviceType int) (string, error) {
-	for name, id := range TSMasterMap {
+	for name, id := range tsMasterNames {
 		if id == deviceType && name != "TS_UNKNOWN_DEVICE" && name != "TS_DEV_END" {
 			return name, nil
 		}
@@ -206,8 +207,8 @@ type TSMasterLoader struct {
 	DLLPath string
 }
 
-// NewTSMasterLoader 创建新的TSMaster加载器
-func NewTSMasterLoader() (*TSMasterLoader, error) {
+// newTSMasterLoader loads TSMaster.dll.
+func newTSMasterLoader() (*TSMasterLoader, error) {
 	loader := &TSMasterLoader{}
 
 	dllPath, err := getTSMasterDLLFromRegistry()
@@ -273,7 +274,7 @@ func getTSMasterDLLFromRegistry() (string, error) {
 	return value, err
 }
 
-// GetProcAddress 获取函数地址
+// GetProcAddress returns the named export, or nil when the DLL is not loaded.
 func (t *TSMasterLoader) GetProcAddress(procName string) *syscall.LazyProc {
 	if t.DLL == nil {
 		return nil
@@ -281,31 +282,30 @@ func (t *TSMasterLoader) GetProcAddress(procName string) *syscall.LazyProc {
 	return t.DLL.NewProc(procName)
 }
 
-// Close 关闭DLL
+// Close drops the DLL reference. syscall.LazyDLL has no unload method; Windows
+// reclaims the module when the process exits.
 func (t *TSMasterLoader) Close() error {
-	// syscall.LazyDLL 没有显式的Close方法
-	// Windows会在进程结束时自动清理
 	t.DLL = nil
 	return nil
 }
 
 type TLIBCAN struct {
-	FIdxChn     uint8    // 通道
+	FIdxChn     uint8    // channel
 	FProperties uint8    // bit0 TX, bit1 remote, bit2 extended
 	FDLC        uint8    // dlc from 0 to 8
-	FReserved   uint8    // 保留字段
+	FReserved   uint8    // reserved
 	FIdentifier int32    // ID
-	FTimeUs     int64    // 时间戳
-	FData       [8]uint8 // 报文数据
+	FTimeUs     int64    // timestamp
+	FData       [8]uint8 // payload
 }
 type TLIBCANFD struct {
-	FIdxChn       uint8 // 通道
+	FIdxChn       uint8 // channel
 	FProperties   uint8 // bit0 TX, bit1 remote, bit2 extended
 	FDLC          uint8 //dlc from 0 to 15
 	FFDProperties uint8
 	FIdentifier   int32     // ID
-	FTimeUs       int64     // 时间戳
-	FData         [64]uint8 // 报文数据
+	FTimeUs       int64     // timestamp
+	FData         [64]uint8 // payload
 }
 
 const (
@@ -329,53 +329,45 @@ type TSMasterMapping struct {
 	HardwareChannel    byte
 }
 
-func DefaultTSMasterMapping(hardwareChannel byte) TSMasterMapping {
+func defaultTSMasterMapping(hardwareChannel byte) TSMasterMapping {
 	return TSMasterMapping{
-		ApplicationChannel: CHANNEL1,
+		ApplicationChannel: can.Channel1,
 		HardwareIndex:      0,
 		HardwareChannel:    hardwareChannel,
 	}
 }
 
 type TSMaster struct {
-	driverObservability
+	observability
 	loader                  *TSMasterLoader
 	isConnected             bool
 	busStatisticsEnabled    bool
 	enableBusStatisticsProc *syscall.LazyProc
 	getBusStatisticsProc    *syscall.LazyProc
-	rxChan                  chan frame
+	rxChan                  chan can.Frame
 	fanout                  *rxFanout
 	ctx                     context.Context
 	cancel                  context.CancelFunc
-	cfg                     config
-	lifecycle               driverLifecycle
-	canType                 mode
-	// CANChannel is the physical hardware channel and is kept for backwards
-	// compatibility. Internal send/receive operations use mapping.ApplicationChannel.
+	cfg                     can.Config
+	lifecycle               lifecycle
+	canType                 can.Mode
+	// CANChannel is the physical hardware channel. Send and receive use mapping.ApplicationChannel.
 	CANChannel byte
 	mapping    TSMasterMapping
 	deviceType int
 }
 
-func NewTSMaster(cantype mode, canChannel byte, deviceType int) *TSMaster {
-	return NewTSMasterWithConfig(defaultConfig(cantype, canChannel), deviceType)
-}
-
-func NewTSMasterWithConfig(cfg config, deviceType int) *TSMaster {
-	return NewTSMasterWithMapping(cfg, deviceType, DefaultTSMasterMapping(cfg.Channel))
-}
-
-func NewTSMasterWithMapping(cfg config, deviceType int, mapping TSMasterMapping) *TSMaster {
-	ctx, cancel := context.WithCancel(context.Background())
+func newTSMaster(cfg can.Config, deviceType int, mapping *TSMasterMapping) *TSMaster {
+	if mapping == nil {
+		mapped := defaultTSMasterMapping(cfg.Channel)
+		mapping = &mapped
+	}
 	cfg.Channel = mapping.HardwareChannel
 	return &TSMaster{
-		ctx:        ctx,
-		cancel:     cancel,
 		cfg:        cfg,
 		canType:    cfg.Mode,
 		CANChannel: mapping.HardwareChannel,
-		mapping:    mapping,
+		mapping:    *mapping,
 		deviceType: deviceType,
 	}
 }
@@ -401,12 +393,9 @@ func (t *TSMaster) initialize() error {
 		return fmt.Errorf("TSMaster hardware index must be >= 0: %d", t.mapping.HardwareIndex)
 	}
 
-	// 创建context和cancel函数
 	t.ctx, t.cancel = context.WithCancel(context.Background())
-
-	// 初始化接收通道
-	t.rxChan = make(chan frame, cfg.RxBufferSize)
-	t.fanout = newRxFanout(t.ctx, t.rxChan, t.resetTelemetryWith(cfg))
+	t.rxChan = make(chan can.Frame, cfg.RxBufferSize)
+	t.fanout = newRxFanout(t.ctx, t.rxChan, t.prepare(cfg))
 
 	cleanup := func(err error) error {
 		if t.cancel != nil {
@@ -430,7 +419,6 @@ func (t *TSMaster) initialize() error {
 			close(t.rxChan)
 			t.rxChan = nil
 		}
-		t.closeTelemetry()
 		t.isConnected = false
 		t.busStatisticsEnabled = false
 		t.enableBusStatisticsProc = nil
@@ -438,8 +426,7 @@ func (t *TSMaster) initialize() error {
 		return err
 	}
 
-	// 创建TSMaster加载器
-	t.loader, err = NewTSMasterLoader()
+	t.loader, err = newTSMasterLoader()
 	if err != nil {
 		return cleanup(fmt.Errorf("failed to load TSMaster DLL: %w", err))
 	}
@@ -460,7 +447,6 @@ func (t *TSMaster) initialize() error {
 		return cleanup(err)
 	}
 
-	// 初始化TSMaster库
 	initialize_lib_tsmaster := t.loader.GetProcAddress("initialize_lib_tsmaster")
 	appName, _ := syscall.UTF16PtrFromString("TSMaster_Go_Demo")
 	r, _, _ := initialize_lib_tsmaster.Call(uintptr(unsafe.Pointer(appName)))
@@ -468,7 +454,6 @@ func (t *TSMaster) initialize() error {
 		return cleanup(fmt.Errorf("initialize_lib_tsmaster failed: %d", r))
 	}
 
-	// 枚举硬件设备
 	var findDevice int32 = 0
 	r, _, _ = t.loader.GetProcAddress("tsapp_enumerate_hw_devices").Call(uintptr(unsafe.Pointer(&findDevice)))
 	if r != 0 {
@@ -482,7 +467,6 @@ func (t *TSMaster) initialize() error {
 	}
 	HardwareName, _ := syscall.BytePtrFromString("Hardware")
 	r, _, _ = t.loader.GetProcAddress("tsapp_show_tsmaster_window").Call(uintptr(unsafe.Pointer(HardwareName)), uintptr(1))
-	// 设置CAN通道数量
 	channelCount := uintptr(t.mapping.ApplicationChannel) + 1
 	r, _, _ = t.loader.GetProcAddress("tsapp_set_can_channel_count").Call(channelCount)
 	if r != 0 {
@@ -507,19 +491,19 @@ func (t *TSMaster) initialize() error {
 	r, _, _ = t.loader.GetProcAddress("tsapp_set_mapping_verbose").Call(
 		uintptr(unsafe.Pointer(appName)),
 		uintptr(0),                            // APP_CAN
-		uintptr(t.mapping.ApplicationChannel), // 应用逻辑通道
+		uintptr(t.mapping.ApplicationChannel), // application channel
 		uintptr(unsafe.Pointer(deviceName)),
 		uintptr(TS_USB_DEVICE),             // TS_USB_DEVICE
-		uintptr(t.deviceType),              // 设备子类型
-		uintptr(t.mapping.HardwareIndex),   // 硬件设备索引
-		uintptr(t.mapping.HardwareChannel), // 硬件物理通道
-		uintptr(1),                         // 启用映射
+		uintptr(t.deviceType),              // device subtype
+		uintptr(t.mapping.HardwareIndex),   // hardware index
+		uintptr(t.mapping.HardwareChannel), // hardware channel
+		uintptr(1),                         // enable mapping
 	)
 	if r != 0 {
 		return cleanup(fmt.Errorf("tsapp_set_mapping_verbose failed: %d", r))
 	}
 	br := float32(t.cfg.NominalBitrate) / 1000
-	if t.canType == CANFD {
+	if t.canType == can.FD {
 		bd := float32(t.cfg.DataBitrate) / 1000
 		r, _, _ = t.loader.GetProcAddress("tsapp_configure_baudrate_canfd").Call(
 			uintptr(t.mapping.ApplicationChannel),
@@ -540,7 +524,6 @@ func (t *TSMaster) initialize() error {
 	if r != 0 {
 		return cleanup(fmt.Errorf("configure bitrate failed: %d", r))
 	}
-	// 连接设备
 	r, _, _ = t.loader.GetProcAddress("tsapp_connect").Call()
 	if r != 0 {
 		return cleanup(fmt.Errorf("tsapp_connect failed: %d", r))
@@ -551,7 +534,6 @@ func (t *TSMaster) initialize() error {
 	}
 	t.busStatisticsEnabled = true
 
-	// 启用接收FIFO
 	enableFIFOProc := t.loader.GetProcAddress("tsfifo_enable_receive_fifo")
 	if enableFIFOProc == nil {
 		return cleanup(errors.New("tsfifo_enable_receive_fifo not found"))
@@ -571,7 +553,7 @@ func (t *TSMaster) start() error {
 	t.lifecycle.opMu.Lock()
 	defer t.lifecycle.opMu.Unlock()
 	if !t.lifecycle.isInitialized() || !t.isConnected {
-		return fmt.Errorf("%w: TSMaster", ErrDeviceNotInitialized)
+		return can.ErrNotOpen
 	}
 	if t.lifecycle.start(t.readLoop) {
 	}
@@ -581,13 +563,13 @@ func (t *TSMaster) start() error {
 func (t *TSMaster) readLoop() {
 	ticker := time.NewTicker(t.cfg.PollingInterval)
 	defer ticker.Stop()
-	var canfdMsg [MsgBufferSize]TLIBCANFD
+	var canfdMsg [msgBufferSize]TLIBCANFD
 	for {
 		select {
 		case <-t.ctx.Done():
 			return
 		case <-ticker.C:
-			var size = int32(MsgBufferSize)
+			var size = int32(msgBufferSize)
 			if r, _, _ := t.loader.GetProcAddress("tsfifo_receive_canfd_msgs").Call(
 				uintptr(unsafe.Pointer(&canfdMsg[0])),
 				uintptr(unsafe.Pointer(&size)),
@@ -596,7 +578,7 @@ func (t *TSMaster) readLoop() {
 			); r != 0 {
 				continue
 			}
-			if size < 0 || size > MsgBufferSize {
+			if size < 0 || size > msgBufferSize {
 				logf(t.cfg, "TSMaster returned invalid receive count %d", size)
 				continue
 			}
@@ -614,26 +596,25 @@ func (t *TSMaster) readLoop() {
 					continue
 				}
 
-				// 使用统一的日志函数
 				msgType := t.canType
 				if msg.FFDProperties&1 == 0 {
-					msgType = CAN
+					msgType = can.Classic
 				} else {
-					msgType = CANFD
+					msgType = can.FD
 				}
-				direction := RX
+				direction := can.Receive
 				directionLabel := "RX"
 				if msg.FProperties&tsCANPropertyTX != 0 {
-					direction = TX
+					direction = can.Transmit
 					directionLabel = "TX"
 				}
-				unifiedMsg := frame{
+				unifiedMsg := can.Frame{
 					Direction: direction, ID: uint32(msg.FIdentifier), DLC: msg.FDLC, Data: msg.FData, FD: msg.FFDProperties&tsCANFDPropertyEDL != 0, BRS: msg.FFDProperties&tsCANFDPropertyBRS != 0,
 					TimestampUS: tsmasterTimestampUS(msg.FTimeUs),
 				}
 				elapsedUS, deltaUS := t.relativeLogTimes(unifiedMsg.TimestampUS, 0)
-				logCANMessageRelative(t.cfg, directionLabel, unifiedMsg.ID, unifiedMsg.DLC, unifiedMsg.Data[:dlcToLen(unifiedMsg.DLC)], msgType, elapsedUS, deltaUS)
-				if direction == TX && !t.cfg.IncludeTxEcho {
+				logCANMessageRelative(t.cfg, directionLabel, unifiedMsg.ID, unifiedMsg.DLC, unifiedMsg.Data[:dlcLen(unifiedMsg.DLC)], msgType, elapsedUS, deltaUS)
+				if direction == can.Transmit && !t.cfg.IncludeTxEcho {
 					t.observeBusFrame(unifiedMsg)
 					continue
 				}
@@ -681,24 +662,23 @@ func (t *TSMaster) stop() {
 		close(t.rxChan)
 		t.rxChan = nil
 	}
-	t.closeTelemetry()
 }
 
-func (t *TSMaster) write(id int32, fd bool, data []byte) error {
+func (t *TSMaster) write(frame can.Frame) error {
+	id := int32(frame.ID)
+	fd := frame.FD
+	data := frame.Data[:frame.DataLength()]
 	t.lifecycle.opMu.Lock()
 	defer t.lifecycle.opMu.Unlock()
 	if !t.lifecycle.isInitialized() {
-		return errors.New("TSMaster driver is not initialized")
-	}
-	if err := validateWrite(t.cfg, id, fd, data); err != nil {
-		return err
+		return can.ErrNotOpen
 	}
 
 	var canfdMsg TLIBCANFD
 	canfdMsg.FIdxChn = t.mapping.ApplicationChannel
 	canfdMsg.FIdentifier = id
 	canfdMsg.FProperties = 1
-	canfdMsg.FDLC = dataLenToDlc(len(data))
+	canfdMsg.FDLC = can.LengthToDLC(len(data))
 	if fd {
 		canfdMsg.FFDProperties = tsCANFDPropertyEDL
 		if t.cfg.BRS {
@@ -707,19 +687,18 @@ func (t *TSMaster) write(id int32, fd bool, data []byte) error {
 	} else {
 		canfdMsg.FFDProperties = 0
 	}
-	// 复制数据到CAN消息
-	maxLen := dlcToLen(canfdMsg.FDLC)
+	maxLen := dlcLen(canfdMsg.FDLC)
 	for i := 0; i < maxLen && i < len(data); i++ {
 		canfdMsg.FData[i] = data[i]
 	}
 	if r, _, _ := t.loader.GetProcAddress("tsapp_transmit_canfd_async").Call(uintptr(unsafe.Pointer(&canfdMsg))); r != 0 {
 		return fmt.Errorf("failed to send CAN-FD message, result code: %d", r)
 	}
-	t.recordBusTx(id, fd, fd && t.cfg.BRS, data)
+	t.recordBusTx(frame)
 	return nil
 }
 
-func (t *TSMaster) subscribe(buffer int) (<-chan frame, func()) {
+func (t *TSMaster) subscribe(buffer int) (<-chan can.Frame, func()) {
 	t.lifecycle.opMu.Lock()
 	defer t.lifecycle.opMu.Unlock()
 	if t.fanout == nil {
@@ -731,22 +710,22 @@ func (t *TSMaster) subscribe(buffer int) (<-chan frame, func()) {
 func (t *TSMaster) isFD() bool {
 	t.lifecycle.opMu.Lock()
 	defer t.lifecycle.opMu.Unlock()
-	return t.canType == CANFD
+	return t.canType == can.FD
 }
 
-func (t *TSMaster) config() config {
+func (t *TSMaster) config() can.Config {
 	t.lifecycle.opMu.Lock()
 	defer t.lifecycle.opMu.Unlock()
 	return t.cfg
 }
 
 // BusLoad returns TSMaster's native CAN bus-load statistic. The API reports a
-// percentage (0..100), while busLoadSnapshot.Load is normalized to 0..1.
-func (t *TSMaster) busLoad() busLoadSnapshot {
+// percentage (0..100), while can.BusLoad.Load is normalized to 0..1.
+func (t *TSMaster) busLoad() can.BusLoad {
 	t.lifecycle.opMu.Lock()
 	defer t.lifecycle.opMu.Unlock()
 
-	info := busLoadSnapshot{
+	info := can.BusLoad{
 		Window:         defaultBusLoadWindow,
 		NominalBitrate: t.cfg.NominalBitrate,
 		DataBitrate:    t.cfg.DataBitrate,
@@ -763,7 +742,7 @@ func (t *TSMaster) busLoad() busLoadSnapshot {
 		uintptr(unsafe.Pointer(&percent)),
 	)
 	if int32(status) != 0 {
-		t.currentTelemetry().report(fmt.Errorf("tsapp_get_bus_statistics failed: %d", int32(status)))
+		t.telemetry().report(fmt.Errorf("tsapp_get_bus_statistics failed: %d", int32(status)))
 		return info
 	}
 	info.Load = normalizeTSMasterBusLoad(percent)
